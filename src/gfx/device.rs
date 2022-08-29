@@ -215,6 +215,10 @@ impl RenderDevice {
       })
   }
 
+  pub fn update_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
+    self.queue.write_buffer(buffer, offset, data);
+  }
+
   pub fn update_texture(
     &self,
     texture: wgpu::ImageCopyTexture,

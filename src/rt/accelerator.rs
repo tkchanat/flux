@@ -107,7 +107,7 @@ impl<'a> Accelerator<'a> {
     }
   }
 
-  pub fn intersect(&self, ray: &Ray, hit: &mut Hit) -> bool {
+  pub fn intersect(&self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
     let mut any_hit = false;
     let bvh_ray = bvh::ray::Ray::new(
       bvh::Point3::new(ray.origin.x, ray.origin.y, ray.origin.z),
@@ -120,7 +120,7 @@ impl<'a> Accelerator<'a> {
     ) {
       for l2 in l1.l2_bvh.traverse(&bvh_ray, &l1.l2nodes) {
         let mut tmp_hit = Hit::default();
-        if l2.shape.intersect(ray, &mut tmp_hit) {
+        if l2.shape.intersect(ray, &mut tmp_hit) && tmp_hit.front {
           any_hit = true;
           if tmp_hit.t < closest_hit {
             closest_hit = tmp_hit.t;

@@ -13,11 +13,13 @@ bvh = "0.6"
 bytemuck = { version = "1.4", features = ["derive"] }
 cfg-if = "1"
 env_logger = "0.9"
+enum-map = "2.4"
 getrandom = { version = "0.2", features = ["js"] }
 glam = "0.21"
 gltf = "1.0"
 log = "0.4"
 pollster = "0.2"
+rand = "0.8"
 wgpu = { version = "0.13", features = ["webgl"] }
 winit = "0.26"
 

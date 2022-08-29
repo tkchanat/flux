@@ -1,4 +1,6 @@
-#[derive(Debug, Default)]
+use std::ops::{Add, Mul};
+
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Color {
   pub r: f32,
   pub g: f32,
@@ -29,5 +31,38 @@ impl Into<[u8; 4]> for Color {
       (self.b * 255.0).clamp(0.0, 255.0) as u8,
       255u8,
     ]
+  }
+}
+
+impl PartialEq for Color {
+  fn eq(&self, other: &Self) -> bool {
+    self.r == other.r && self.g == other.g && self.b == other.b
+  }
+}
+
+impl Add for Color {
+  type Output = Color;
+  fn add(self, rhs: Self) -> Self::Output {
+    Self::Output::new(self.r + rhs.r, self.g + rhs.g, self.b + rhs.b)
+  }
+}
+
+impl Mul<Color> for Color {
+  type Output = Color;
+  fn mul(self, rhs: Self) -> Self::Output {
+    Self::Output::new(self.r * rhs.r, self.g * rhs.g, self.b * rhs.b)
+  }
+}
+
+impl Mul<f32> for Color {
+  type Output = Color;
+  fn mul(self, scalar: f32) -> Self::Output {
+    Self::Output::new(self.r * scalar, self.g * scalar, self.b * scalar)
+  }
+}
+
+impl From<glam::Vec3A> for Color {
+  fn from(v: glam::Vec3A) -> Self {
+    Self::new(v.x, v.y, v.z)
   }
 }

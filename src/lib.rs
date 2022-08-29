@@ -1,8 +1,9 @@
+mod core;
 mod gfx;
 mod math;
 mod rt;
-mod core;
 use gfx::*;
+use gltf::buffer;
 use winit::{
   dpi::PhysicalSize,
   event::*,
@@ -11,15 +12,16 @@ use winit::{
 };
 
 pub trait AppState {
-  fn update(&mut self);
+  fn update(&mut self, input: &InputSystem);
   fn resize(&mut self, new_size: &PhysicalSize<u32>);
-  fn input(&mut self, event: &WindowEvent) -> bool;
+  fn input(&mut self, input: &InputSystem) -> bool;
   fn render(&mut self) -> Result<(), wgpu::SurfaceError>;
 }
 
 pub struct Application {
   event_loop: EventLoop<()>,
   window: Window,
+  input_system: InputSystem,
   state: Box<dyn AppState>,
 }
 
@@ -50,10 +52,12 @@ impl Application {
     }
 
     init_render_device(&window);
-    let state = Box::new(State::new());
+    let input_system = InputSystem::new();
+    let state = Box::new(RealtimeState::new());
     Self {
       event_loop,
       window,
+      input_system,
       state,
     }
   }
@@ -73,8 +77,15 @@ impl Application {
     self
       .event_loop
       .run(move |event, _, control_flow| match event {
-        Event::RedrawRequested(window_id) if window_id == self.window.id() => {
-          self.state.update();
+        // Event::RedrawRequested(window_id) if window_id == self.window.id() => {}
+        Event::MainEventsCleared => {
+          // Input update
+          self.input_system.update();
+
+          // Game update
+          self.state.update(&self.input_system);
+
+          // Render
           match self.state.render() {
             Ok(_) => {}
             // Reconfigure the surface if lost
@@ -84,17 +95,15 @@ impl Application {
             // All other errors (Outdated, Timeout) should be resolved by the next frame
             Err(e) => eprintln!("{:?}", e),
           }
-        }
-        Event::MainEventsCleared => {
-          // RedrawRequested will only trigger once, unless we manually
-          // request it.
-          self.window.request_redraw();
+
+          // Frame clean up
+          self.input_system.scroll_delta = (0.0, 0.0);
         }
         Event::WindowEvent {
           ref event,
           window_id,
         } if window_id == self.window.id() => {
-          if self.state.input(event) {
+          if self.state.input(&self.input_system) {
             match event {
               WindowEvent::CloseRequested
               | WindowEvent::KeyboardInput {
@@ -113,9 +122,96 @@ impl Application {
               _ => {}
             }
           }
+          self.input_system.handle_event(event);
         }
         _ => {}
       });
+  }
+}
+
+pub struct InputSystem {
+  mouse_position: Option<(f64, f64)>,
+  last_mouse_position: Option<(f64, f64)>,
+  mouse_delta: (f64, f64),
+  mouse_pressed: [bool; 3],
+  scroll_delta: (f32, f32),
+  key_pressed: [bool; 163],
+}
+
+impl InputSystem {
+  pub fn new() -> Self {
+    Self {
+      mouse_position: None,
+      last_mouse_position: None,
+      mouse_delta: (0.0, 0.0),
+      mouse_pressed: [false; 3],
+      scroll_delta: (0.0, 0.0),
+      key_pressed: [false; 163],
+    }
+  }
+  pub fn update(&mut self) {
+    self.mouse_delta = match self.mouse_position {
+      Some(position) => match self.last_mouse_position {
+        Some(last_position) => (position.0 - last_position.0, position.1 - last_position.1),
+        None => (0.0, 0.0),
+      },
+      None => (0.0, 0.0),
+    };
+    self.last_mouse_position = self.mouse_position;
+  }
+  pub fn handle_event(&mut self, event: &winit::event::WindowEvent) {
+    match event {
+      WindowEvent::CursorMoved { position, .. } => {
+        self.mouse_position = Some((position.x, position.y));
+      }
+      WindowEvent::CursorLeft { .. } => {
+        self.mouse_position = None;
+      }
+      WindowEvent::MouseInput { state, button, .. } => {
+        let pressed = *state == ElementState::Pressed;
+        match button {
+          MouseButton::Left => {
+            self.mouse_pressed[0] = pressed;
+          }
+          MouseButton::Right => {
+            self.mouse_pressed[1] = pressed;
+          }
+          MouseButton::Middle => {
+            self.mouse_pressed[2] = pressed;
+          }
+          _ => (),
+        }
+      }
+      WindowEvent::MouseWheel { delta, .. } => match delta {
+        MouseScrollDelta::LineDelta(dx, dy) => self.scroll_delta = (*dx, *dy),
+        MouseScrollDelta::PixelDelta(_) => unreachable!(),
+      },
+      WindowEvent::KeyboardInput { input, .. } => {
+        let pressed = input.state == ElementState::Pressed;
+        if let Some(keycode) = input.virtual_keycode {
+          self.key_pressed[keycode as usize] = pressed;
+        }
+      }
+      _ => {}
+    }
+  }
+  pub fn is_mouse_pressed(&self, button: MouseButton) -> bool {
+    let index = match button {
+      MouseButton::Left => 0,
+      MouseButton::Right => 1,
+      MouseButton::Middle => 2,
+      MouseButton::Other(_) => panic!("Unsupported mouse button"),
+    };
+    self.mouse_pressed[index]
+  }
+  pub fn is_mouse_released(&self, button: MouseButton) -> bool {
+    !self.is_mouse_pressed(button)
+  }
+  pub fn is_key_pressed(&self, keycode: VirtualKeyCode) -> bool {
+    self.key_pressed[keycode as usize]
+  }
+  pub fn is_key_released(&self, keycode: VirtualKeyCode) -> bool {
+    !self.is_key_pressed(keycode)
   }
 }
 
@@ -187,7 +283,233 @@ const VERTICES: &[Vertex] = &[
 
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
 
-struct State {
+struct RealtimeCamera {
+  aspect: f32,
+  fov_y: f32,
+  near: f32,
+  far: f32,
+  yaw: f32,
+  pitch: f32,
+  sensitivity: f32,
+  distance: f32,
+}
+
+impl RealtimeCamera {
+  fn new(aspect: f32, fov_y: f32, near: f32, far: f32) -> Self {
+    RealtimeCamera {
+      aspect,
+      fov_y,
+      near,
+      far,
+      yaw: 0.0,
+      pitch: 0.0,
+      sensitivity: 0.01,
+      distance: 1.0,
+    }
+  }
+
+  fn view(&self) -> glam::Mat4 {
+    let eye = glam::Vec3::new(
+      self.yaw.sin() * self.pitch.cos(),
+      self.pitch.sin(),
+      self.yaw.cos() * self.pitch.cos(),
+    ) * self.distance;
+    let target = glam::Vec3::ZERO;
+    let up = glam::Vec3::Y;
+    glam::Mat4::look_at_rh(eye, target, up)
+  }
+
+  fn projection(&self) -> glam::Mat4 {
+    glam::Mat4::perspective_rh(self.fov_y, self.aspect, self.near, self.far)
+  }
+
+  fn update(&mut self, input: &InputSystem) {
+    if input.is_mouse_pressed(MouseButton::Right) {
+      let (dx, dy) = input.mouse_delta;
+      self.yaw = self.yaw - dx as f32 * self.sensitivity;
+      self.pitch = self.pitch + dy as f32 * self.sensitivity;
+    }
+    if input.scroll_delta.1 != 0.0 {
+      self.distance = self.distance - input.scroll_delta.1;
+    }
+  }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniform {
+  pub view: [[f32; 4]; 4],
+  pub projection: [[f32; 4]; 4],
+}
+
+struct RealtimeState {
+  render_pipeline: wgpu::RenderPipeline,
+  vertex_buffer: wgpu::Buffer,
+  index_buffer: wgpu::Buffer,
+  camera: RealtimeCamera,
+  camera_buffer: wgpu::Buffer,
+  camera_bind_group: wgpu::BindGroup,
+}
+
+impl RealtimeState {
+  fn new() -> Self {
+    let shader = context().create_shader_module(Some("Shader"), include_str!("incandescent.wgsl"));
+
+    let vertex_buffer = context().create_buffer(
+      Some("Vertex Buffer"),
+      bytemuck::cast_slice(VERTICES),
+      wgpu::BufferUsages::VERTEX,
+    );
+
+    let index_buffer = context().create_buffer(
+      Some("Index Buffer"),
+      bytemuck::cast_slice(INDICES),
+      wgpu::BufferUsages::INDEX,
+    );
+
+    let camera = RealtimeCamera::new(1.0, 45f32.to_radians(), 0.01, 1000.0);
+    let camera_uniform = CameraUniform {
+      view: camera.view().to_cols_array_2d(),
+      projection: camera.projection().to_cols_array_2d(),
+    };
+
+    let camera_buffer = context().create_buffer(
+      Some("Camera Buffer"),
+      bytemuck::cast_slice(&[camera_uniform]),
+      wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    );
+
+    let camera_bind_group_layout = context().create_bind_group_layout(
+      Some("camera_bind_group_layout"),
+      &[wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+          ty: wgpu::BufferBindingType::Uniform,
+          has_dynamic_offset: false,
+          min_binding_size: None,
+        },
+        count: None,
+      }],
+    );
+    let camera_bind_group = context().create_bind_group(
+      Some("camera_bind_group"),
+      &camera_bind_group_layout,
+      &[wgpu::BindGroupEntry {
+        binding: 0,
+        resource: camera_buffer.as_entire_binding(),
+      }],
+    );
+
+    let render_pipeline_layout = context().create_pipeline_layout(
+      Some("Render Pipeline Layout"),
+      &[&camera_bind_group_layout],
+      &[],
+    );
+
+    let render_pipeline = context().create_pipeline(
+      Some("Render Pipeline"),
+      Some(&render_pipeline_layout),
+      wgpu::VertexState {
+        module: &shader,
+        entry_point: "vs_main",
+        buffers: &[Vertex::desc()],
+      },
+      Some(wgpu::FragmentState {
+        module: &shader,
+        entry_point: "fs_main",
+        targets: &[Some(wgpu::ColorTargetState {
+          format: context().surface_format(),
+          blend: Some(wgpu::BlendState::REPLACE),
+          write_mask: wgpu::ColorWrites::ALL,
+        })],
+      }),
+      wgpu::PrimitiveState {
+        topology: wgpu::PrimitiveTopology::TriangleList,
+        strip_index_format: None,
+        front_face: wgpu::FrontFace::Ccw,
+        cull_mode: Some(wgpu::Face::Back),
+        polygon_mode: wgpu::PolygonMode::Fill,
+        unclipped_depth: false,
+        conservative: false,
+      },
+      None,
+      wgpu::MultisampleState {
+        count: 1,
+        mask: !0,
+        alpha_to_coverage_enabled: false,
+      },
+    );
+
+    Self {
+      render_pipeline,
+      vertex_buffer,
+      index_buffer,
+      camera,
+      camera_buffer,
+      camera_bind_group,
+    }
+  }
+}
+
+impl AppState for RealtimeState {
+  fn update(&mut self, input: &InputSystem) {
+    self.camera.update(&input);
+  }
+
+  fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
+
+  fn input(&mut self, input: &InputSystem) -> bool {
+    true
+  }
+
+  fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    let output = context().surface_texture()?;
+    let view = output
+      .texture
+      .create_view(&wgpu::TextureViewDescriptor::default());
+
+    context().update_buffer(
+      &self.camera_buffer,
+      0,
+      bytemuck::cast_slice(&[CameraUniform {
+        view: self.camera.view().to_cols_array_2d(),
+        projection: self.camera.projection().to_cols_array_2d(),
+      }]),
+    );
+
+    context().encode_commands(&|encoder: &mut wgpu::CommandEncoder| {
+      let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+          view: &view,
+          resolve_target: None,
+          ops: wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color {
+              r: 0.1,
+              g: 0.2,
+              b: 0.3,
+              a: 1.0,
+            }),
+            store: true,
+          },
+        })],
+        depth_stencil_attachment: None,
+      });
+
+      render_pass.set_pipeline(&self.render_pipeline);
+      render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+      render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+      render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+      render_pass.draw_indexed(0..(INDICES.len() as u32), 0, 0..1);
+    });
+    output.present();
+
+    Ok(())
+  }
+}
+
+struct RaytraceState {
   render_pipeline: wgpu::RenderPipeline,
   vertex_buffer: wgpu::Buffer,
   index_buffer: wgpu::Buffer,
@@ -196,7 +518,7 @@ struct State {
   texture_bind_group: wgpu::BindGroup,
 }
 
-impl State {
+impl RaytraceState {
   fn new() -> Self {
     let render_settings = rt::RenderSettings {
       resolution: (400, 400),
@@ -332,14 +654,14 @@ impl State {
   }
 }
 
-impl AppState for State {
+impl AppState for RaytraceState {
   fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
 
-  fn input(&mut self, event: &WindowEvent) -> bool {
+  fn input(&mut self, input: &InputSystem) -> bool {
     true
   }
 
-  fn update(&mut self) {}
+  fn update(&mut self, input: &InputSystem) {}
 
   fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
     let output = context().surface_texture()?;

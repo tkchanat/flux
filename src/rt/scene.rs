@@ -1,15 +1,6 @@
-use std::collections::VecDeque;
-
+use super::{mesh::TriangleMesh, shape::Triangle};
 use bvh::{aabb::AABB, Vector3};
 use glam::{Affine3A, Vec3};
-
-use crate::math::Ray;
-
-use super::{
-  accelerator::Accelerator,
-  mesh::{Mesh, TriangleMesh},
-  shape::Triangle, hit::Hit,
-};
 
 pub enum Primitive {
   Empty,
@@ -19,15 +10,6 @@ pub enum Primitive {
 pub struct Node {
   pub prim: Primitive,
   pub children: Vec<Node>,
-}
-
-impl Node {
-  pub fn empty() -> Self {
-    Self {
-      prim: Primitive::Empty,
-      children: Vec::new(),
-    }
-  }
 }
 
 pub struct Scene {

@@ -4,7 +4,7 @@ use bvh::aabb::{Bounded, AABB};
 use glam::{Vec3, Vec3A};
 
 pub trait Shape: bvh::aabb::Bounded + Sync + Send {
-  fn intersect(&self, ray: &Ray, hit: &mut Hit) -> bool;
+  fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool;
 }
 
 pub struct Sphere {
@@ -71,7 +71,7 @@ impl Triangle {
 }
 
 impl Shape for Triangle {
-  fn intersect(&self, ray: &Ray, hit: &mut Hit) -> bool {
+  fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
     let p0 = Vec3A::from(self.vertices[0]);
     let p1 = Vec3A::from(self.vertices[1]);
     let p2 = Vec3A::from(self.vertices[2]);
@@ -130,8 +130,11 @@ impl Shape for Triangle {
       return false; //P is on the right side;
     }
 
+    hit.shape = Some(self);
+    hit.p = p;
     hit.t = t.min(hit.t);
     hit.ng = n.normalize();
+    hit.ns = hit.ng;
     hit.front = hit.ng.dot(-ray.direction) > 0.0;
     true //this ray hits the triangle
   }
