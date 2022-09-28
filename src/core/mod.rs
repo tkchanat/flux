@@ -1,4 +1,8 @@
-use std::time::{Duration, Instant};
+mod scene;
+pub use scene::*;
+
+// use std::time::{Duration, Instant};
+use instant::{Instant, Duration};
 
 pub struct Timer {
   instant: Instant,

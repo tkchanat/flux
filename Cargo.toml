@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bimap = "0.6"
 bvh = "0.6"
 bytemuck = { version = "1.4", features = ["derive"] }
 cfg-if = "1"
@@ -17,7 +18,10 @@ enum-map = "2.4"
 getrandom = { version = "0.2", features = ["js"] }
 glam = "0.21"
 gltf = "1.0"
+instant = "0.1"
+itertools = "0.10"
 log = "0.4"
+specs = "0.18"
 pollster = "0.2"
 rand = "0.8"
 wgpu = { version = "0.13", features = ["webgl"] }

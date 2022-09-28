@@ -6,12 +6,12 @@ use bvh::{
   bvh::BVH,
 };
 
-use crate::math::Ray;
-
 use super::{
+  hit::Hit,
   scene::{Primitive, Scene},
-  shape::Shape, hit::Hit,
+  shape::Shape,
 };
+use crate::math::Ray;
 
 struct L1Node<'a> {
   l2_bvh: BVH,
@@ -76,6 +76,10 @@ impl<'a> Accelerator<'a> {
         let mut l2nodes = Vec::new();
         match &current_node.prim {
           Primitive::Empty => (),
+          Primitive::SphereGeometry(sphere) => l2nodes.push(L2Node {
+            shape: sphere,
+            node_index: 0,
+          }),
           Primitive::TriangleMesh(tri_mesh) => {
             for triangle in &tri_mesh.shapes {
               l2nodes.push(L2Node {
@@ -85,7 +89,7 @@ impl<'a> Accelerator<'a> {
             }
           }
         }
-        
+
         if !l2nodes.is_empty() {
           let l1node = L1Node {
             l2_bvh: BVH::build(&mut l2nodes),
@@ -114,10 +118,7 @@ impl<'a> Accelerator<'a> {
       bvh::Vector3::new(ray.direction.x, ray.direction.y, ray.direction.z),
     );
     let mut closest_hit = f32::INFINITY;
-    for l1 in self.l1_bvh.traverse(
-      &bvh_ray,
-      &self.l1nodes,
-    ) {
+    for l1 in self.l1_bvh.traverse(&bvh_ray, &self.l1nodes) {
       for l2 in l1.l2_bvh.traverse(&bvh_ray, &l1.l2nodes) {
         let mut tmp_hit = Hit::default();
         if l2.shape.intersect(ray, &mut tmp_hit) && tmp_hit.front {

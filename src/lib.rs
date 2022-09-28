@@ -1,9 +1,11 @@
 mod core;
 mod gfx;
 mod math;
-mod rt;
+mod raytrace;
+pub mod ecs;
+
 use gfx::*;
-use gltf::buffer;
+use rand::Rng;
 use winit::{
   dpi::PhysicalSize,
   event::*,
@@ -18,20 +20,30 @@ pub trait AppState {
   fn render(&mut self) -> Result<(), wgpu::SurfaceError>;
 }
 
+static mut APP_INSTANCE: Option<Application> = None;
+
+fn app() -> &'static mut Application {
+  unsafe {
+    APP_INSTANCE
+      .as_mut()
+      .expect("Application not initialized yet")
+  }
+}
+
 pub struct Application {
-  event_loop: EventLoop<()>,
+  quit_requested: bool,
   window: Window,
   input_system: InputSystem,
   state: Box<dyn AppState>,
+  // scene: core::Scene,
 }
 
 impl Application {
-  pub fn new() -> Self {
+  pub fn new(event_loop: &EventLoop<()>) -> Self {
     let size = PhysicalSize::new(400, 400);
-    let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
       .with_inner_size(size)
-      .build(&event_loop)
+      .build(event_loop)
       .unwrap();
     #[cfg(target_arch = "wasm32")]
     {
@@ -53,79 +65,83 @@ impl Application {
 
     init_render_device(&window);
     let input_system = InputSystem::new();
-    let state = Box::new(RealtimeState::new());
+    let state = Box::new(RaytraceState::new());
+    // let scene = core::Scene::new();
     Self {
-      event_loop,
+      quit_requested: false,
       window,
       input_system,
       state,
+      // scene,
     }
   }
+}
 
-  pub fn run(mut self) {
-    let on_resize = |state: &mut Box<dyn AppState>, new_size: PhysicalSize<u32>| {
-      if new_size.width > 0 && new_size.height > 0 {
-        context().resize(&new_size);
-        state.resize(&new_size);
-      }
-    };
-    let quit = |control_flow: &mut ControlFlow| {
-      drop_render_device();
-      *control_flow = ControlFlow::Exit;
-    };
-
-    self
-      .event_loop
-      .run(move |event, _, control_flow| match event {
-        // Event::RedrawRequested(window_id) if window_id == self.window.id() => {}
-        Event::MainEventsCleared => {
-          // Input update
-          self.input_system.update();
-
-          // Game update
-          self.state.update(&self.input_system);
-
-          // Render
-          match self.state.render() {
-            Ok(_) => {}
-            // Reconfigure the surface if lost
-            Err(wgpu::SurfaceError::Lost) => on_resize(&mut self.state, self.window.inner_size()),
-            // The system is out of memory, we should probably quit
-            Err(wgpu::SurfaceError::OutOfMemory) => quit(control_flow),
-            // All other errors (Outdated, Timeout) should be resolved by the next frame
-            Err(e) => eprintln!("{:?}", e),
-          }
-
-          // Frame clean up
-          self.input_system.scroll_delta = (0.0, 0.0);
-        }
-        Event::WindowEvent {
-          ref event,
-          window_id,
-        } if window_id == self.window.id() => {
-          if self.state.input(&self.input_system) {
-            match event {
-              WindowEvent::CloseRequested
-              | WindowEvent::KeyboardInput {
-                input:
-                  KeyboardInput {
-                    state: ElementState::Pressed,
-                    virtual_keycode: Some(VirtualKeyCode::Escape),
-                    ..
-                  },
-                ..
-              } => quit(control_flow),
-              WindowEvent::Resized(physical_size) => on_resize(&mut self.state, *physical_size),
-              WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                on_resize(&mut self.state, **new_inner_size)
-              }
-              _ => {}
-            }
-          }
-          self.input_system.handle_event(event);
-        }
+impl Application {
+  fn event(&mut self, event: &WindowEvent) {
+    if app().state.input(&app().input_system) {
+      match event {
+        WindowEvent::CloseRequested
+        | WindowEvent::KeyboardInput {
+          input:
+            KeyboardInput {
+              state: ElementState::Pressed,
+              virtual_keycode: Some(VirtualKeyCode::Escape),
+              ..
+            },
+          ..
+        } => self.quit(),
+        WindowEvent::Resized(physical_size) => self.on_resize(*physical_size),
+        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => self.on_resize(**new_inner_size),
         _ => {}
-      });
+      }
+    }
+    app().input_system.handle_event(event);
+  }
+  fn start(&mut self) {
+    // let sphere = core::NodeBuilder::new()
+    //   .with(core::GeomSphere { radius: 1.0 })
+    //   .with(core::Transform3d::from_position(glam::Vec3::new(
+    //     0.0, 0.0, -1.0,
+    //   )))
+    //   .build();
+    // self.scene.root.add_child(sphere);
+  }
+  fn update(&mut self) {
+    // Input update
+    self.input_system.update();
+
+    // Game update
+    self.state.update(&self.input_system);
+
+    // Render
+    match self.state.render() {
+      Ok(_) => {}
+      // Reconfigure the surface if lost
+      Err(wgpu::SurfaceError::Lost) => self.on_resize(self.window.inner_size()),
+      // The system is out of memory, we should probably quit
+      Err(wgpu::SurfaceError::OutOfMemory) => self.quit(),
+      // All other errors (Outdated, Timeout) should be resolved by the next frame
+      Err(e) => eprintln!("{:?}", e),
+    }
+
+    // Frame clean up
+    self.input_system.scroll_delta = (0.0, 0.0);
+  }
+  fn on_resize(&mut self, new_size: PhysicalSize<u32>) {
+    if new_size.width > 0 && new_size.height > 0 {
+      context().resize(&new_size);
+      self.state.resize(&new_size);
+    }
+  }
+  fn quit(&mut self) {
+    self.quit_requested = true;
+  }
+}
+
+impl Drop for Application {
+  fn drop(&mut self) {
+    drop_render_device();
   }
 }
 
@@ -229,8 +245,29 @@ pub fn run() {
     }
   }
 
-  let app = Application::new();
-  app.run();
+  let event_loop = EventLoop::new();
+  unsafe {
+    APP_INSTANCE = Some(Application::new(&event_loop));
+  }
+  app().start();
+  event_loop.run(move |event, _, control_flow| match event {
+    // Event::RedrawRequested(window_id) if window_id == self.window.id() => {}
+    Event::MainEventsCleared => {
+      if app().quit_requested {
+        *control_flow = ControlFlow::Exit;
+      }
+      app().update();
+    }
+    Event::WindowEvent {
+      ref event,
+      window_id,
+    } if window_id == app().window.id() => {
+      if app().state.input(&app().input_system) {
+        app().event(&event);
+      }
+    }
+    _ => {}
+  });
 }
 
 // lib.rs
@@ -280,8 +317,15 @@ const VERTICES: &[Vertex] = &[
     tex_coords: [0.0, 1.0],
   },
 ];
-
 const INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
+const AXIS_HELPER_VERTICES: &[[f32; 6]] = &[
+  [0.0, 0.0, 0.0, 1.0, 0.0, 0.0], // x axis
+  [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+  [0.0, 0.0, 0.0, 0.0, 1.0, 0.0], // y axis
+  [0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+  [0.0, 0.0, 0.0, 0.0, 0.0, 1.0], // z axis
+  [0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+];
 
 struct RealtimeCamera {
   aspect: f32,
@@ -343,31 +387,28 @@ struct CameraUniform {
 }
 
 struct RealtimeState {
-  render_pipeline: wgpu::RenderPipeline,
-  vertex_buffer: wgpu::Buffer,
-  index_buffer: wgpu::Buffer,
+  pipeline_incandescent: wgpu::RenderPipeline,
+  pipeline_axis_helper: wgpu::RenderPipeline,
+  axis_helper_buffer: gfx::VertexBuffer,
+  sphere: gfx::Mesh,
   camera: RealtimeCamera,
-  camera_buffer: wgpu::Buffer,
+  camera_buffer: gfx::UniformBuffer<CameraUniform>,
   camera_bind_group: wgpu::BindGroup,
+  instance_buffer: VertexBuffer,
 }
 
 impl RealtimeState {
   fn new() -> Self {
-    let shader = context().create_shader_module(Some("Shader"), include_str!("incandescent.wgsl"));
+    let axis_helper_buffer = gfx::VertexBuffer::new(bytemuck::cast_slice(AXIS_HELPER_VERTICES));
+    let sphere = gfx::Mesh::sphere();
 
-    let vertex_buffer = context().create_buffer(
-      Some("Vertex Buffer"),
-      bytemuck::cast_slice(VERTICES),
-      wgpu::BufferUsages::VERTEX,
-    );
+    let mut rng = rand::thread_rng();
+    let positions = (0..1000)
+      .map(|x| math::cosine_sample_hemisphere(&glam::Vec2::new(rng.gen(), rng.gen())).to_array())
+      .collect::<Vec<_>>();
+    let instance_buffer = gfx::VertexBuffer::new(bytemuck::cast_slice(&positions));
 
-    let index_buffer = context().create_buffer(
-      Some("Index Buffer"),
-      bytemuck::cast_slice(INDICES),
-      wgpu::BufferUsages::INDEX,
-    );
-
-    let camera = RealtimeCamera::new(1.0, 45f32.to_radians(), 0.01, 1000.0);
+    let camera = RealtimeCamera::new(1.0, 60f32.to_radians(), 0.01, 1000.0);
     let camera_uniform = CameraUniform {
       view: camera.view().to_cols_array_2d(),
       projection: camera.projection().to_cols_array_2d(),
@@ -378,6 +419,7 @@ impl RealtimeState {
       bytemuck::cast_slice(&[camera_uniform]),
       wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     );
+    let camera_buffer = gfx::UniformBuffer::new();
 
     let camera_bind_group_layout = context().create_bind_group_layout(
       Some("camera_bind_group_layout"),
@@ -397,7 +439,7 @@ impl RealtimeState {
       &camera_bind_group_layout,
       &[wgpu::BindGroupEntry {
         binding: 0,
-        resource: camera_buffer.as_entire_binding(),
+        resource: camera_buffer.binding(),
       }],
     );
 
@@ -406,17 +448,29 @@ impl RealtimeState {
       &[&camera_bind_group_layout],
       &[],
     );
-
-    let render_pipeline = context().create_pipeline(
+    let shader_incandescent =
+      context().create_shader_module(Some("Shader"), include_str!("incandescent.wgsl"));
+    let pipeline_incandescent = context().create_pipeline(
       Some("Render Pipeline"),
       Some(&render_pipeline_layout),
       wgpu::VertexState {
-        module: &shader,
+        module: &shader_incandescent,
         entry_point: "vs_main",
-        buffers: &[Vertex::desc()],
+        buffers: &[
+          Vertex::desc(),
+          wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[wgpu::VertexAttribute {
+              offset: 0,
+              shader_location: 2,
+              format: wgpu::VertexFormat::Float32x3,
+            }],
+          },
+        ],
       },
       Some(wgpu::FragmentState {
-        module: &shader,
+        module: &shader_incandescent,
         entry_point: "fs_main",
         targets: &[Some(wgpu::ColorTargetState {
           format: context().surface_format(),
@@ -441,13 +495,66 @@ impl RealtimeState {
       },
     );
 
+    let shader_axis_helper =
+      context().create_shader_module(Some("Shader"), include_str!("axis_helper.wgsl"));
+    let pipeline_axis_helper = context().create_pipeline(
+      Some("Render Pipeline"),
+      Some(&render_pipeline_layout),
+      wgpu::VertexState {
+        module: &shader_axis_helper,
+        entry_point: "vs_main",
+        buffers: &[wgpu::VertexBufferLayout {
+          array_stride: std::mem::size_of::<[f32; 6]>() as wgpu::BufferAddress,
+          step_mode: wgpu::VertexStepMode::Vertex,
+          attributes: &[
+            wgpu::VertexAttribute {
+              offset: 0,
+              shader_location: 0,
+              format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+              offset: std::mem::size_of::<[f32; 3]>() as u64,
+              shader_location: 1,
+              format: wgpu::VertexFormat::Float32x3,
+            },
+          ],
+        }],
+      },
+      Some(wgpu::FragmentState {
+        module: &shader_axis_helper,
+        entry_point: "fs_main",
+        targets: &[Some(wgpu::ColorTargetState {
+          format: context().surface_format(),
+          blend: Some(wgpu::BlendState::REPLACE),
+          write_mask: wgpu::ColorWrites::ALL,
+        })],
+      }),
+      wgpu::PrimitiveState {
+        topology: wgpu::PrimitiveTopology::LineList,
+        strip_index_format: None,
+        front_face: wgpu::FrontFace::Ccw,
+        cull_mode: Some(wgpu::Face::Back),
+        polygon_mode: wgpu::PolygonMode::Fill,
+        unclipped_depth: false,
+        conservative: false,
+      },
+      None,
+      wgpu::MultisampleState {
+        count: 1,
+        mask: !0,
+        alpha_to_coverage_enabled: false,
+      },
+    );
+
     Self {
-      render_pipeline,
-      vertex_buffer,
-      index_buffer,
+      pipeline_incandescent,
+      pipeline_axis_helper,
+      axis_helper_buffer,
+      sphere,
       camera,
       camera_buffer,
       camera_bind_group,
+      instance_buffer,
     }
   }
 }
@@ -469,14 +576,9 @@ impl AppState for RealtimeState {
       .texture
       .create_view(&wgpu::TextureViewDescriptor::default());
 
-    context().update_buffer(
-      &self.camera_buffer,
-      0,
-      bytemuck::cast_slice(&[CameraUniform {
-        view: self.camera.view().to_cols_array_2d(),
-        projection: self.camera.projection().to_cols_array_2d(),
-      }]),
-    );
+    self.camera_buffer.data.view = self.camera.view().to_cols_array_2d();
+    self.camera_buffer.data.projection = self.camera.projection().to_cols_array_2d();
+    self.camera_buffer.update();
 
     context().encode_commands(&|encoder: &mut wgpu::CommandEncoder| {
       let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -497,11 +599,20 @@ impl AppState for RealtimeState {
         depth_stencil_attachment: None,
       });
 
-      render_pass.set_pipeline(&self.render_pipeline);
+      render_pass.set_pipeline(&self.pipeline_incandescent);
       render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-      render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-      render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-      render_pass.draw_indexed(0..(INDICES.len() as u32), 0, 0..1);
+      render_pass.set_vertex_buffer(0, self.sphere.vertex_buffer.buffer.slice(..));
+      render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
+      if let Some(index_buffer) = &self.sphere.index_buffer {
+        render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..(self.sphere.index_count), 0, 0..1000);
+      }
+
+      // // axis helper
+      // render_pass.set_pipeline(&self.pipeline_axis_helper);
+      // render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+      // render_pass.set_vertex_buffer(0, self.axis_helper_buffer.buffer.slice(..));
+      // render_pass.draw(0..AXIS_HELPER_VERTICES.len() as u32, 0..1);
     });
     output.present();
 
@@ -513,18 +624,18 @@ struct RaytraceState {
   render_pipeline: wgpu::RenderPipeline,
   vertex_buffer: wgpu::Buffer,
   index_buffer: wgpu::Buffer,
-  render_engine: rt::RenderEngine,
+  render_engine: raytrace::RenderEngine,
   texture: gfx::Texture2D,
   texture_bind_group: wgpu::BindGroup,
 }
 
 impl RaytraceState {
   fn new() -> Self {
-    let render_settings = rt::RenderSettings {
+    let render_settings = raytrace::RenderSettings {
       resolution: (400, 400),
       ..Default::default()
     };
-    let mut render_engine = rt::RenderEngine::new(render_settings);
+    let mut render_engine = raytrace::RenderEngine::new(render_settings);
     render_engine.render_frame();
 
     let shader = context().create_shader_module(Some("Shader"), include_str!("shader.wgsl"));

@@ -1,7 +1,8 @@
 use super::hit::Hit;
-use crate::math::Ray;
+use crate::math::{coordinate_system, Ray};
 use bvh::aabb::{Bounded, AABB};
-use glam::{Vec3, Vec3A};
+use glam::{Mat3A, Vec2, Vec3, Vec3A};
+use std::f32::consts::PI;
 
 pub trait Shape: bvh::aabb::Bounded + Sync + Send {
   fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool;
@@ -19,7 +20,7 @@ impl Sphere {
 }
 
 impl Shape for Sphere {
-  fn intersect(&self, ray: &Ray, hit: &mut Hit) -> bool {
+  fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
     let center = Vec3A::from(self.center);
 
     let oc = ray.origin - center;
@@ -41,9 +42,18 @@ impl Shape for Sphere {
       }
     }
 
+    hit.shape = Some(self);
+    hit.p = ray.origin + t * ray.direction;
     hit.t = t.min(hit.t);
-    hit.ng = ((ray.origin + ray.direction * t) - center).normalize();
-    hit.front = hit.ng.dot(ray.direction) > 0.0;
+    hit.ng = (hit.p - center).normalize();
+    hit.ns = hit.ng;
+
+    let theta = (-hit.ns.y).acos();
+    let phi = (-hit.ns.z).atan2(hit.ns.x) + PI;
+    hit.uv = Vec2::new(phi / (2.0 * PI), theta / PI);
+    hit.dpdu = Vec3A::new(-theta.sin(), 0.0, phi.cos());
+    hit.dpdv = hit.ns.cross(hit.dpdu);
+    hit.front = hit.ng.dot(-ray.direction) > 0.0;
     true
   }
 }
@@ -59,15 +69,9 @@ impl Bounded for Sphere {
 
 #[derive(Clone)]
 pub struct Triangle {
-  vertices: [Vec3; 3],
-}
-
-impl Triangle {
-  pub fn new(p0: Vec3, p1: Vec3, p2: Vec3) -> Self {
-    Self {
-      vertices: [p0, p1, p2],
-    }
-  }
+  pub vertices: [Vec3; 3],
+  pub normals: [Vec3; 3],
+  pub texcoords: Option<[Vec2; 3]>,
 }
 
 impl Shape for Triangle {
@@ -75,26 +79,30 @@ impl Shape for Triangle {
     let p0 = Vec3A::from(self.vertices[0]);
     let p1 = Vec3A::from(self.vertices[1]);
     let p2 = Vec3A::from(self.vertices[2]);
+    let n0 = Vec3A::from(self.normals[0]);
+    let n1 = Vec3A::from(self.normals[1]);
+    let n2 = Vec3A::from(self.normals[2]);
 
     // compute plane's normal
     let v0v1 = p1 - p0;
     let v0v2 = p2 - p0;
     // no need to normalize
-    let n = v0v1.cross(v0v2); // normal
+    let ng = v0v1.cross(v0v2); // normal
+    let area = ng.length() / 2.0;
 
     // Step 1: finding P
 
     // check if ray and plane are parallel ?
-    let n_dot_ray = n.dot(ray.direction);
+    let n_dot_ray = ng.dot(ray.direction);
     if n_dot_ray.abs() < 0.0001 {
       return false; //they are parallel so they don't intersect !
     }
 
     // compute d parameter using equation 2
-    let d = -n.dot(p0);
+    let d = -ng.dot(p0);
 
     // compute t (equation 3)
-    let t = -(n.dot(ray.origin) + d) / n_dot_ray;
+    let t = -(ng.dot(ray.origin) + d) / n_dot_ray;
 
     // check if the triangle is in behind the ray
     if t < ray.t_min || t > ray.t_max {
@@ -110,32 +118,64 @@ impl Shape for Triangle {
     let edge0 = p1 - p0;
     let vp0 = p - p0;
     let c = edge0.cross(vp0);
-    if n.dot(c) < 0.0 {
-      return false; //P is on the right side
+    if ng.dot(c) < 0.0 {
+      return false; // P is on the right side
     }
 
     // edge 1
     let edge1 = p2 - p1;
     let vp1 = p - p1;
     let c = edge1.cross(vp1);
-    if n.dot(c) < 0.0 {
-      return false; //P is on the right side
+    let u = (c.length() / 2.0) / area;
+    if ng.dot(c) < 0.0 {
+      return false; // P is on the right side
     }
 
     // edge 2
     let edge2 = p0 - p2;
     let vp2 = p - p2;
     let c = edge2.cross(vp2);
-    if n.dot(c) < 0.0 {
-      return false; //P is on the right side;
+    let v = (c.length() / 2.0) / area;
+    if ng.dot(c) < 0.0 {
+      return false; // P is on the right side
     }
+
+    let w = 1.0 - u - v;
+    assert!(u >= 0.0 && u <= 1.0, "u={}, v={}, w={}", u, v, w);
+    assert!(v >= 0.0 && v <= 1.0, "u={}, v={}, w={}", u, v, w);
+    // assert!(w >= 0.0, "u={}, v={}, w={}", u, v, w);
 
     hit.shape = Some(self);
     hit.p = p;
     hit.t = t.min(hit.t);
-    hit.ng = n.normalize();
-    hit.ns = hit.ng;
+    hit.ng = ng;
+    hit.ns = (n0 * u + n1 * v + n2 * w).normalize();
     hit.front = hit.ng.dot(-ray.direction) > 0.0;
+
+    let texcoords = match self.texcoords {
+      Some(texcoords) => texcoords,
+      None => [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(1.0, 1.0),
+      ],
+    };
+
+    let dp1 = p1 - p0;
+    let dp2 = p2 - p0;
+    let duv1 = texcoords[1] - texcoords[0];
+    let duv2 = texcoords[2] - texcoords[0];
+    hit.uv = texcoords[0] * u + texcoords[1] * v + texcoords[2] * w;
+    let determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+    // Handle degenerate uv
+    if determinant.abs() < 1e-8 {
+      coordinate_system(&hit.ns, &mut hit.dpdu, &mut hit.dpdv);
+    } else {
+      let r = 1.0 / determinant;
+      hit.dpdu = (dp1 * duv2.y - dp2 * duv1.y) * r;
+      hit.dpdv = (dp2 * duv1.x - dp1 * duv2.x) * r;
+    }
+
     true //this ray hits the triangle
   }
 }

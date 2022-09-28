@@ -1,9 +1,9 @@
-use glam::{Affine3A, Mat3, Mat4, Vec3, Vec3A};
+use glam::{Affine3A, Mat3, Mat4, Vec2, Vec3, Vec3A};
 
 use crate::math::Ray;
 
 pub trait Camera {
-  fn ray(&self, ndc: (f32, f32)) -> Ray;
+  fn ray(&self, ndc: &Vec2) -> Ray;
 }
 
 pub struct PinholeCamera {
@@ -42,12 +42,12 @@ impl PinholeCamera {
 }
 
 impl Camera for PinholeCamera {
-  fn ray(&self, ndc: (f32, f32)) -> Ray {
+  fn ray(&self, ndc: &Vec2) -> Ray {
     let far_plane_hy = self.far * (self.fov_y * 0.5).tan();
     let far_plane_hx = self.aspect * far_plane_hy;
     let direction = Vec3A::new(
-      ndc.0 as f32 * far_plane_hx,
-      ndc.1 as f32 * far_plane_hy,
+      ndc.x as f32 * far_plane_hx,
+      ndc.y as f32 * far_plane_hy,
       -self.far,
     ).normalize();
     let origin = self.world_to_view.translation;

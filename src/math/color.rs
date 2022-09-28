@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul};
+use std::ops::{Add, Div, Mul, Sub};
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Color {
@@ -47,6 +47,13 @@ impl Add for Color {
   }
 }
 
+impl Sub for Color {
+  type Output = Color;
+  fn sub(self, rhs: Self) -> Self::Output {
+    Self::Output::new(self.r - rhs.r, self.g - rhs.g, self.b - rhs.b)
+  }
+}
+
 impl Mul<Color> for Color {
   type Output = Color;
   fn mul(self, rhs: Self) -> Self::Output {
@@ -58,6 +65,13 @@ impl Mul<f32> for Color {
   type Output = Color;
   fn mul(self, scalar: f32) -> Self::Output {
     Self::Output::new(self.r * scalar, self.g * scalar, self.b * scalar)
+  }
+}
+
+impl Div<f32> for Color {
+  type Output = Color;
+  fn div(self, scalar: f32) -> Self::Output {
+    Self::Output::new(self.r / scalar, self.g / scalar, self.b / scalar)
   }
 }
 

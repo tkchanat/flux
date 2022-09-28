@@ -1,13 +1,12 @@
 use std::f32::consts::PI;
 
 use super::hit::Hit;
-use crate::math::{sample_hemisphere, Color};
+use crate::math::{cosine_sample_hemisphere, uniform_sample_sphere, Color};
 use glam::Vec3A;
-use rand::Rng;
 
 pub trait BSDF {
   fn eval(&self, hit: &Hit, wo: &Vec3A, wi: &Vec3A, pdf: &mut f32) -> Color;
-  fn sample(&self, hit: &Hit, wo: &Vec3A, wi: &mut Vec3A, pdf: &mut f32) -> Color;
+  fn sample(&self, hit: &Hit, wo: &Vec3A, wi: &mut Vec3A, pdf: &mut f32, sample: &glam::Vec2) -> Color;
 }
 
 pub struct Lambertian {
@@ -39,12 +38,8 @@ impl BSDF for Lambertian {
     self.diffuse_color
   }
 
-  fn sample(&self, hit: &Hit, _wo: &Vec3A, wi: &mut Vec3A, pdf: &mut f32) -> Color {
-    let mut rng = rand::thread_rng();
-    *wi = hit.frame.transform_vector3a(sample_hemisphere(
-      rng.gen_range(0.0..PI),
-      rng.gen_range(-PI..PI),
-    ));
+  fn sample(&self, hit: &Hit, _wo: &Vec3A, wi: &mut Vec3A, pdf: &mut f32, sample: &glam::Vec2) -> Color {
+    *wi = hit.local_to_world(cosine_sample_hemisphere(sample));
 
     let cos_theta_i = hit.ns.dot(*wi);
     if cos_theta_i <= 0.0 {
