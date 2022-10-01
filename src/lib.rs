@@ -1,8 +1,8 @@
 mod core;
+pub mod ecs;
 mod gfx;
 mod math;
 mod raytrace;
-pub mod ecs;
 
 use gfx::*;
 use rand::Rng;
@@ -35,7 +35,7 @@ pub struct Application {
   window: Window,
   input_system: InputSystem,
   state: Box<dyn AppState>,
-  // scene: core::Scene,
+  scene: core::Scene,
 }
 
 impl Application {
@@ -64,15 +64,12 @@ impl Application {
     }
 
     init_render_device(&window);
-    let input_system = InputSystem::new();
-    let state = Box::new(RaytraceState::new());
-    // let scene = core::Scene::new();
     Self {
       quit_requested: false,
       window,
-      input_system,
-      state,
-      // scene,
+      input_system: InputSystem::new(),
+      state: Box::new(RaytraceState::new()),
+      scene: core::Scene::new(),
     }
   }
 }

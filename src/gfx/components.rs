@@ -1,9 +1,10 @@
-use crate::ecs::storage::Component;
+use specs::{Component, DenseVecStorage};
+use specs_derive::Component;
 
+#[derive(Component)]
 pub struct Transform {
   affine: glam::Affine3A,
 }
-impl Component for Transform {}
 impl Transform {
   pub fn new() -> Self {
     Self {
@@ -28,15 +29,5 @@ impl Transform {
     Self {
       affine: glam::Affine3A::from_scale_rotation_translation(scale, rotation, translation),
     }
-  }
-}
-
-pub struct GeomSphere {
-  radius: f32,
-}
-impl Component for GeomSphere {}
-impl GeomSphere {
-  pub fn new(radius: f32) -> Self {
-    Self { radius }
   }
 }

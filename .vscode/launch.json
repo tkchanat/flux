@@ -3,9 +3,13 @@
     "configurations": [
         {
             "name": "(Windows) Launch",
-            "type": "cppvsdbg",
+            "type": "lldb",
+            "program": "${workspaceRoot}/target/release/flux",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceRoot}/target/release/flux.exe",
+            },
             "request": "launch",
-            "program": "${workspaceRoot}/target/release/flux.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
@@ -17,13 +21,5 @@
             ],
             "externalConsole": true
         },
-        {
-            "name": "(OSX) Launch",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceRoot}/target/debug/flux",
-            "args": [],
-            "cwd": "${workspaceRoot}",
-        }
     ]
 }
