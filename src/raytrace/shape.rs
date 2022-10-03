@@ -51,7 +51,9 @@ impl Shape for Sphere {
     let theta = (-hit.ns.y).acos();
     let phi = (-hit.ns.z).atan2(hit.ns.x) + PI;
     hit.uv = Vec2::new(phi / (2.0 * PI), theta / PI);
-    hit.dpdu = Vec3A::new(-theta.sin(), 0.0, phi.cos());
+
+    let north = Vec3A::Y;
+    hit.dpdu = north.cross(hit.ns).normalize();
     hit.dpdv = hit.ns.cross(hit.dpdu);
     hit.front = hit.ng.dot(-ray.direction) > 0.0;
     true

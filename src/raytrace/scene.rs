@@ -20,15 +20,6 @@ pub(super) struct Node {
   pub children: Vec<Node>,
 }
 
-pub enum SceneEngineError {
-  Outdated,
-  Destroyed,
-}
-pub struct SceneEngineRef {
-  scene_ref: *const SceneEngine,
-  modified: bool,
-}
-
 pub struct SceneEngine {
   pub(super) root: Node,
 }

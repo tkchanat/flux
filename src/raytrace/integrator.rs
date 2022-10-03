@@ -35,12 +35,10 @@ impl Integrator for PathIntegrator {
   fn li(&self, accel: &Accelerator, sampler: &mut dyn Sampler, ray: Ray, bounce: u32) -> Color {
     let mut hit = Hit::default();
     let found_intersection = accel.intersect(&ray, &mut hit);
-    if !found_intersection || bounce >= self.max_bounce {
-      // if ray.direction.dot(glam::Vec3A::Y) > 0.0 {
-      //   return Color::WHITE;
-      // } else {
-        return sky_color(&ray);
-      // }
+    if !found_intersection {
+      return sky_color(&ray);
+    } else if bounce >= self.max_bounce {
+      return Color::BLACK;
     }
 
     let wo = -ray.direction;
@@ -63,7 +61,7 @@ impl Integrator for PathIntegrator {
     le + f * self.li(accel, sampler, new_ray, bounce + 1) * cosine
     // wi.into()
     // ((hit.ns + 1.0) * 0.5).into()
-    // hit.frame.col(0).into()
+    // hit.dpdu.into()
     // Color::new(hit.uv.x, hit.uv.y, 0.0)
   }
 }
