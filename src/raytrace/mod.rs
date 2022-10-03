@@ -9,14 +9,17 @@ mod sampler;
 mod scene;
 mod shape;
 
+pub use self::scene::SceneEngine;
 use self::{
   accelerator::Accelerator,
   camera::{Camera, PinholeCamera},
   film::Film,
   integrator::{Integrator, PathIntegrator},
-  scene::Scene,
 };
-use crate::{core::Timer, raytrace::sampler::{StratifiedSampler, Sampler}};
+use crate::{
+  core::Timer,
+  raytrace::sampler::{Sampler, StratifiedSampler},
+};
 use glam::{Vec2, Vec3};
 use std::{
   sync::{Arc, RwLock},
@@ -51,12 +54,14 @@ impl RenderEngine {
     Self { film, settings }
   }
 
-  pub fn render_frame(&mut self) {
+  pub fn prepare_scene(&mut self, scene: &SceneEngine) {}
+
+  pub fn render_frame<'a>(&mut self, scene: Arc<RwLock<SceneEngine>>) {
     let timer = Timer::new();
     // let scene = Scene::from_gltf(
     //   "C:/Users/tkchanat/Desktop/glTF-Sample-Models-master/2.0/Suzanne/glTF/Suzanne.gltf",
     // );
-    let scene = Scene::raytracing_in_one_weekend();
+    // let scene = Scene::raytracing_in_one_weekend();
     println!("Scene loading took: {:?}", timer.elapsed());
 
     let width = self.settings.resolution.0;
@@ -67,9 +72,9 @@ impl RenderEngine {
     camera.look_at(Vec3::new(2.0, 1.0, 2.0), Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
     
     thread::spawn(move || {
+      let accelerator = Accelerator::build(&scene.read().unwrap());
       println!("BVH building took: {:?}", timer.elapsed());
       
-      let accelerator = Accelerator::build(&scene);
       let integrator = PathIntegrator::new(8);
       let mut sampler = StratifiedSampler::new();
       for spp in 1..=samples_per_pixel {

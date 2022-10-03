@@ -2,7 +2,10 @@ mod core;
 pub mod ecs;
 mod gfx;
 mod math;
+mod prefabs;
 mod raytrace;
+
+use std::{io::Empty, sync::{RwLock, Arc}};
 
 use gfx::*;
 use rand::Rng;
@@ -14,10 +17,15 @@ use winit::{
 };
 
 pub trait AppState {
-  fn update(&mut self, input: &InputSystem);
-  fn resize(&mut self, new_size: &PhysicalSize<u32>);
-  fn input(&mut self, input: &InputSystem) -> bool;
-  fn render(&mut self) -> Result<(), wgpu::SurfaceError>;
+  fn start(&mut self) {}
+  fn update(&mut self, input: &InputSystem) {}
+  fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
+  fn input(&mut self, input: &InputSystem) -> bool {
+    true
+  }
+  fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    Ok(())
+  }
 }
 
 static mut APP_INSTANCE: Option<Application> = None;
@@ -96,13 +104,9 @@ impl Application {
     app().input_system.handle_event(event);
   }
   fn start(&mut self) {
-    // let sphere = core::NodeBuilder::new()
-    //   .with(core::GeomSphere { radius: 1.0 })
-    //   .with(core::Transform3d::from_position(glam::Vec3::new(
-    //     0.0, 0.0, -1.0,
-    //   )))
-    //   .build();
-    // self.scene.root.add_child(sphere);
+    let top_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, 0.0, -1.0), 0.5);
+    let bottom_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, -100.5, -1.0), 100.0);
+    self.state.start();
   }
   fn update(&mut self) {
     // Input update
@@ -563,10 +567,6 @@ impl AppState for RealtimeState {
 
   fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
 
-  fn input(&mut self, input: &InputSystem) -> bool {
-    true
-  }
-
   fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
     let output = context().surface_texture()?;
     let view = output
@@ -622,6 +622,7 @@ struct RaytraceState {
   vertex_buffer: wgpu::Buffer,
   index_buffer: wgpu::Buffer,
   render_engine: raytrace::RenderEngine,
+  scene_engine: Arc<RwLock<raytrace::SceneEngine>>,
   texture: gfx::Texture2D,
   texture_bind_group: wgpu::BindGroup,
 }
@@ -632,8 +633,8 @@ impl RaytraceState {
       resolution: (400, 400),
       ..Default::default()
     };
-    let mut render_engine = raytrace::RenderEngine::new(render_settings);
-    render_engine.render_frame();
+    let render_engine = raytrace::RenderEngine::new(render_settings);
+    let scene_engine = std::sync::Arc::new(RwLock::new(raytrace::SceneEngine::new()));
 
     let shader = context().create_shader_module(Some("Shader"), include_str!("shader.wgsl"));
 
@@ -756,6 +757,7 @@ impl RaytraceState {
       vertex_buffer,
       index_buffer,
       render_engine,
+      scene_engine,
       texture,
       texture_bind_group,
     }
@@ -763,6 +765,11 @@ impl RaytraceState {
 }
 
 impl AppState for RaytraceState {
+  fn start(&mut self) {
+    self.scene_engine.write().unwrap().translate(&app().scene);
+    self.render_engine.render_frame(self.scene_engine.clone());
+  }
+
   fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
 
   fn input(&mut self, input: &InputSystem) -> bool {

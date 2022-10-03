@@ -1,11 +1,12 @@
 mod buffer;
+mod components;
 mod device;
 mod mesh;
 mod procedural;
 mod texture;
-mod components;
 
 pub use buffer::*;
+pub use components::*;
 pub use device::*;
 pub use mesh::*;
 pub use procedural::*;

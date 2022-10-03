@@ -6,20 +6,16 @@
             "type": "lldb",
             "program": "${workspaceRoot}/target/release/flux",
             "windows": {
-                "type": "cppvsdbg",
                 "program": "${workspaceRoot}/target/release/flux.exe",
             },
             "request": "launch",
             "args": [],
-            "stopAtEntry": false,
+            "stopOnEntry": false,
             "cwd": "${workspaceRoot}",
-            "environment": [
-                {
-                    "name": "RUST_BACKTRACE",
-                    "value": "1"
-                }
-            ],
-            "externalConsole": true
+            "env": {
+                "RUST_BACKTRACE": "1"
+            },
+            "terminal": "integrated",
         },
     ]
 }

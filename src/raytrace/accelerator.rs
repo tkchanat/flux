@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, slice::Iter};
+use std::{collections::VecDeque, slice::Iter, sync::Arc};
 
 use bvh::{
   aabb::{Bounded, AABB},
@@ -8,18 +8,18 @@ use bvh::{
 
 use super::{
   hit::Hit,
-  scene::{Primitive, Scene},
+  scene::{Primitive, SceneEngine},
   shape::Shape,
 };
 use crate::math::Ray;
 
-struct L1Node<'a> {
+struct L1Node {
   l2_bvh: BVH,
-  l2nodes: Vec<L2Node<'a>>,
+  l2nodes: Vec<L2Node>,
   node_index: usize,
 }
 
-impl<'a> Bounded for L1Node<'a> {
+impl Bounded for L1Node {
   fn aabb(&self) -> bvh::aabb::AABB {
     let mut aabb = AABB::empty();
     for l2 in &self.l2nodes {
@@ -29,7 +29,7 @@ impl<'a> Bounded for L1Node<'a> {
   }
 }
 
-impl<'a> BHShape for L1Node<'a> {
+impl BHShape for L1Node {
   fn set_bh_node_index(&mut self, node_index: usize) {
     self.node_index = node_index;
   }
@@ -39,18 +39,22 @@ impl<'a> BHShape for L1Node<'a> {
   }
 }
 
-struct L2Node<'a> {
-  shape: &'a dyn Shape,
+struct L2Node {
+  shape: *const dyn Shape,
   node_index: usize,
 }
-
-impl<'a> Bounded for L2Node<'a> {
+impl L2Node {
+  fn shape(&self) -> &dyn Shape {
+    unsafe { self.shape.as_ref().unwrap() }
+  }
+}
+impl Bounded for L2Node {
   fn aabb(&self) -> bvh::aabb::AABB {
-    self.shape.aabb()
+    self.shape().aabb()
   }
 }
 
-impl<'a> BHShape for L2Node<'a> {
+impl BHShape for L2Node {
   fn set_bh_node_index(&mut self, node_index: usize) {
     self.node_index = node_index;
   }
@@ -60,13 +64,13 @@ impl<'a> BHShape for L2Node<'a> {
   }
 }
 
-pub struct Accelerator<'a> {
+pub struct Accelerator {
   l1_bvh: BVH,
-  l1nodes: Vec<L1Node<'a>>,
+  l1nodes: Vec<L1Node>,
 }
 
-impl<'a> Accelerator<'a> {
-  pub fn build(scene: &'a Scene) -> Self {
+impl Accelerator {
+  pub fn build(scene: &SceneEngine) -> Self {
     let mut l1nodes = Vec::new();
     let mut stack = VecDeque::new();
     stack.push_back(&scene.root);
@@ -111,7 +115,7 @@ impl<'a> Accelerator<'a> {
     }
   }
 
-  pub fn intersect(&self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
+  pub fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
     let mut any_hit = false;
     let bvh_ray = bvh::ray::Ray::new(
       bvh::Point3::new(ray.origin.x, ray.origin.y, ray.origin.z),
@@ -121,7 +125,7 @@ impl<'a> Accelerator<'a> {
     for l1 in self.l1_bvh.traverse(&bvh_ray, &self.l1nodes) {
       for l2 in l1.l2_bvh.traverse(&bvh_ray, &l1.l2nodes) {
         let mut tmp_hit = Hit::default();
-        if l2.shape.intersect(ray, &mut tmp_hit) && tmp_hit.front {
+        if l2.shape().intersect(ray, &mut tmp_hit) && tmp_hit.front {
           any_hit = true;
           if tmp_hit.t < closest_hit {
             closest_hit = tmp_hit.t;
