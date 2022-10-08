@@ -2,8 +2,8 @@ use glam::{Affine3A, Mat3A, Vec2, Vec3A};
 
 use super::shape::Shape;
 
-pub struct Hit<'a> {
-  pub shape: Option<&'a dyn Shape>,
+pub(super) struct Hit<'a> {
+  pub shape: Option<&'a Shape>,
   pub p: Vec3A,
   pub ng: Vec3A,
   pub ns: Vec3A,

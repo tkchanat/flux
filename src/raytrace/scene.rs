@@ -1,18 +1,12 @@
+use super::{camera::Camera, shape::TriangleMesh};
+use crate::{core::Read, gfx::Transform, prefabs::GeomSphere};
 use std::sync::Arc;
-
-use crate::{core::Read, prefabs::GeomSphere};
-
-use super::{
-  mesh::TriangleMesh,
-  shape::{Shape, Sphere, Triangle},
-};
-use bvh::{aabb::AABB, Vector3};
-use glam::{Affine3A, Vec2, Vec3};
 
 pub(super) enum Primitive {
   Empty,
-  SphereGeometry(Sphere),
-  TriangleMesh(TriangleMesh),
+  Camera(Box<dyn Camera>),
+  Sphere(glam::Vec3, f32),
+  TriangleMesh(Arc<TriangleMesh>),
 }
 
 pub(super) struct Node {
@@ -37,13 +31,16 @@ impl SceneEngine {
   }
   fn translate_node(&mut self, node: &crate::core::Node) -> Node {
     let prim = {
-      if let Some(geom_sphere) = node.get_component::<Read<GeomSphere>>() {
-        return Node {
-          prim: Primitive::SphereGeometry(Sphere::new(geom_sphere.center, geom_sphere.radius)),
-          children: Vec::new(),
-        };
+      if let Some(transform) = node.get_component::<Read<Transform>>() {
+        let transform = transform.matrix().clone();
+        if let Some(sphere) = node.get_component::<Read<GeomSphere>>() {
+          Primitive::Sphere(transform.translation.into(), sphere.radius)
+        } else {
+          Primitive::Empty
+        }
+      } else {
+        Primitive::Empty
       }
-      Primitive::Empty
     };
     let mut children = Vec::new();
     for child in node.children() {

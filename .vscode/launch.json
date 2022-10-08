@@ -13,7 +13,7 @@
             "stopOnEntry": false,
             "cwd": "${workspaceRoot}",
             "env": {
-                "RUST_BACKTRACE": "1"
+                "RUST_BACKTRACE": "full"
             },
             "terminal": "integrated",
         },

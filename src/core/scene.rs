@@ -1,4 +1,4 @@
-use crate::{app, prefabs::GeomSphere};
+use crate::{app, prefabs::{GeomSphere, Camera}, gfx::Transform};
 use specs::{Builder, Component, DenseVecStorage, Entity, World, WorldExt};
 use specs_derive::Component;
 use std::{
@@ -211,6 +211,8 @@ impl Scene {
     let mut world = World::new();
     world.register::<Relationship>();
     world.register::<GeomSphere>();
+    world.register::<Transform>();
+    world.register::<Camera>();
 
     let handle = Arc::new(RwLock::new(world));
     let root = Node {

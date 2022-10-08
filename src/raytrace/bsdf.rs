@@ -4,7 +4,7 @@ use super::hit::Hit;
 use crate::math::{cosine_sample_hemisphere, uniform_sample_sphere, Color};
 use glam::Vec3A;
 
-pub trait BSDF {
+pub(super) trait BSDF {
   fn eval(&self, hit: &Hit, wo: &Vec3A, wi: &Vec3A, pdf: &mut f32) -> Color;
   fn sample(&self, hit: &Hit, wo: &Vec3A, wi: &mut Vec3A, pdf: &mut f32, sample: &glam::Vec2) -> Color;
 }

@@ -30,4 +30,7 @@ impl Transform {
       affine: glam::Affine3A::from_scale_rotation_translation(scale, rotation, translation),
     }
   }
+  pub fn matrix(&self) -> &glam::Affine3A {
+    &self.affine
+  }
 }

@@ -4,7 +4,6 @@ mod camera;
 mod film;
 mod hit;
 mod integrator;
-mod mesh;
 mod sampler;
 mod scene;
 mod shape;
@@ -26,8 +25,10 @@ use std::{
   thread,
 };
 
+#[derive(Clone)]
 pub struct RenderSettings {
   pub resolution: (u32, u32),
+  pub samples_per_pixel: u32,
   pub max_bounce: u32,
 }
 
@@ -35,6 +36,7 @@ impl Default for RenderSettings {
   fn default() -> Self {
     Self {
       resolution: (640, 480),
+      samples_per_pixel: 64,
       max_bounce: 8,
     }
   }
@@ -45,6 +47,13 @@ pub struct RenderEngine {
   pub settings: RenderSettings,
 }
 
+pub struct RenderContext {
+  settings: RenderSettings,
+  accelerator: Arc<Accelerator>,
+  cameras: Vec<Arc<dyn Camera>>,
+  active_camera: usize,
+}
+
 impl RenderEngine {
   pub fn new(settings: RenderSettings) -> Self {
     let film = Arc::new(RwLock::new(Film::new(
@@ -53,31 +62,33 @@ impl RenderEngine {
     )));
     Self { film, settings }
   }
-
-  pub fn prepare_scene(&mut self, scene: &SceneEngine) {}
-
-  pub fn render_frame<'a>(&mut self, scene: Arc<RwLock<SceneEngine>>) {
+  pub fn prepare_render(&mut self, scene: &SceneEngine) -> RenderContext {
     let timer = Timer::new();
-    // let scene = Scene::from_gltf(
-    //   "C:/Users/tkchanat/Desktop/glTF-Sample-Models-master/2.0/Suzanne/glTF/Suzanne.gltf",
-    // );
-    // let scene = Scene::raytracing_in_one_weekend();
-    println!("Scene loading took: {:?}", timer.elapsed());
 
-    let width = self.settings.resolution.0;
-    let height = self.settings.resolution.1;
-    let samples_per_pixel = 64;
-    let film_handle = self.film.clone();
+    let accelerator = Arc::new(Accelerator::build(&scene));
+    println!("BVH building took: {:?}", timer.elapsed());
+
     let mut camera = PinholeCamera::new(60f32.to_radians(), 1.0, 0.01, 1000.0);
     camera.look_at(Vec3::new(2.0, 1.0, 2.0), Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
-    
+
+    RenderContext {
+      settings: self.settings.clone(),
+      accelerator,
+      cameras: vec![Arc::new(camera)],
+      active_camera: 0,
+    }
+  }
+  pub fn render_frame(&self, context: RenderContext) {
+    let width = context.settings.resolution.0;
+    let height = context.settings.resolution.1;
+    let film_handle = self.film.clone();
+    let camera = context.cameras[context.active_camera].clone();
+
     thread::spawn(move || {
-      let accelerator = Accelerator::build(&scene.read().unwrap());
-      println!("BVH building took: {:?}", timer.elapsed());
-      
-      let integrator = PathIntegrator::new(8);
+      let timer = Timer::new();
+      let integrator = PathIntegrator::new(context.settings.max_bounce);
       let mut sampler = StratifiedSampler::new();
-      for spp in 1..=samples_per_pixel {
+      for spp in 1..=context.settings.samples_per_pixel {
         for y in 0..height {
           for x in 0..width {
             let jitter = sampler.get_2d() - 0.5;
@@ -87,7 +98,7 @@ impl RenderEngine {
             ) * 2.0
               - 1.0;
             let ray = camera.ray(&ndc);
-            let color = integrator.li(&accelerator, &mut sampler, ray, 0);
+            let color = integrator.li(&context.accelerator, &mut sampler, ray, 0);
             {
               let film_rw_lock = film_handle.clone();
               let mut film = film_rw_lock.write().unwrap();

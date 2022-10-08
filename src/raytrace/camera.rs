@@ -2,7 +2,7 @@ use glam::{Affine3A, Mat3, Mat4, Vec2, Vec3, Vec3A};
 
 use crate::math::Ray;
 
-pub trait Camera {
+pub trait Camera: Sync + Send {
   fn ray(&self, ndc: &Vec2) -> Ray;
 }
 

@@ -1,27 +1,38 @@
 use super::hit::Hit;
 use crate::math::{coordinate_system, Ray};
 use bvh::aabb::{Bounded, AABB};
-use glam::{Mat3A, Vec2, Vec3, Vec3A};
-use std::f32::consts::PI;
+use std::{f32::consts::PI, sync::Arc};
 
-pub trait Shape: bvh::aabb::Bounded + Sync + Send {
-  fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool;
+pub(super) enum Shape {
+  Sphere(Sphere),
+  Triangle(Triangle),
+}
+impl Shape {
+  pub(super) fn aabb(&self) -> bvh::aabb::AABB {
+    match &self {
+      Shape::Sphere(sphere) => sphere.aabb(),
+      Shape::Triangle(triangle) => triangle.aabb(),
+    }
+  }
+  pub(super) fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
+    match &self {
+      Shape::Sphere(sphere) => sphere.intersect(ray, hit),
+      Shape::Triangle(triangle) => triangle.intersect(ray, hit),
+    }
+  }
 }
 
 pub struct Sphere {
-  center: Vec3,
+  center: glam::Vec3,
   radius: f32,
 }
 
 impl Sphere {
-  pub fn new(center: Vec3, radius: f32) -> Self {
+  pub fn new(center: glam::Vec3, radius: f32) -> Self {
     Self { center, radius }
   }
-}
-
-impl Shape for Sphere {
   fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
-    let center = Vec3A::from(self.center);
+    let center = glam::Vec3A::from(self.center);
 
     let oc = ray.origin - center;
     let a = ray.direction.length_squared();
@@ -42,7 +53,6 @@ impl Shape for Sphere {
       }
     }
 
-    hit.shape = Some(self);
     hit.p = ray.origin + t * ray.direction;
     hit.t = t.min(hit.t);
     hit.ng = (hit.p - center).normalize();
@@ -50,16 +60,15 @@ impl Shape for Sphere {
 
     let theta = (-hit.ns.y).acos();
     let phi = (-hit.ns.z).atan2(hit.ns.x) + PI;
-    hit.uv = Vec2::new(phi / (2.0 * PI), theta / PI);
+    hit.uv = glam::Vec2::new(phi / (2.0 * PI), theta / PI);
 
-    let north = Vec3A::Y;
+    let north = glam::Vec3A::Y;
     hit.dpdu = north.cross(hit.ns).normalize();
     hit.dpdv = hit.ns.cross(hit.dpdu);
     hit.front = hit.ng.dot(-ray.direction) > 0.0;
     true
   }
 }
-
 impl Bounded for Sphere {
   fn aabb(&self) -> AABB {
     let center = bvh::Vector3::new(self.center.x, self.center.y, self.center.z);
@@ -69,21 +78,77 @@ impl Bounded for Sphere {
   }
 }
 
-#[derive(Clone)]
-pub struct Triangle {
-  pub vertices: [Vec3; 3],
-  pub normals: [Vec3; 3],
-  pub texcoords: Option<[Vec2; 3]>,
+pub struct TriangleMesh {
+  pub points: Vec<glam::Vec3>,
+  pub normals: Vec<glam::Vec3>,
+  pub texcoords: Option<Vec<glam::Vec2>>,
+  pub indices: Vec<u32>,
+  pub tri_count: u32,
+  object_to_world: glam::Affine3A,
+  world_to_object: glam::Affine3A,
+}
+impl TriangleMesh {
+  fn new(
+    points: Vec<glam::Vec3>,
+    normals: Vec<glam::Vec3>,
+    texcoords: Option<Vec<glam::Vec2>>,
+    indices: Vec<u32>,
+    tri_count: u32,
+    object_to_world: glam::Affine3A,
+    world_to_object: glam::Affine3A,
+  ) -> Self {
+    Self {
+      points,
+      normals,
+      texcoords,
+      indices,
+      tri_count,
+      object_to_world,
+      world_to_object,
+    }
+  }
 }
 
-impl Shape for Triangle {
+pub struct Triangle {
+  mesh: Arc<TriangleMesh>,
+  pub id: u32,
+}
+impl Triangle {
+  pub(super) fn new(mesh: Arc<TriangleMesh>, id: u32) -> Self {
+    Self { mesh, id }
+  }
+  fn uvs(&self) -> [glam::Vec2; 3] {
+    match &self.mesh.texcoords {
+      Some(texcoords) => [
+        texcoords[self.mesh.indices[(self.id * 3) as usize] as usize],
+        texcoords[self.mesh.indices[(self.id * 3) as usize + 1] as usize],
+        texcoords[self.mesh.indices[(self.id * 3) as usize + 2] as usize],
+      ],
+      None => [
+        glam::Vec2::new(0.0, 0.0),
+        glam::Vec2::new(1.0, 0.0),
+        glam::Vec2::new(1.0, 1.0),
+      ],
+    }
+  }
+  fn points(&self) -> [glam::Vec3; 3] {
+    [
+      self.mesh.points[self.mesh.indices[(self.id * 3) as usize] as usize],
+      self.mesh.points[self.mesh.indices[(self.id * 3) as usize + 1] as usize],
+      self.mesh.points[self.mesh.indices[(self.id * 3) as usize + 2] as usize],
+    ]
+  }
+  fn normals(&self) -> [glam::Vec3; 3] {
+    [
+      self.mesh.normals[self.mesh.indices[(self.id * 3) as usize] as usize],
+      self.mesh.normals[self.mesh.indices[(self.id * 3) as usize + 1] as usize],
+      self.mesh.normals[self.mesh.indices[(self.id * 3) as usize + 2] as usize],
+    ]
+  }
   fn intersect<'a>(&'a self, ray: &Ray, hit: &mut Hit<'a>) -> bool {
-    let p0 = Vec3A::from(self.vertices[0]);
-    let p1 = Vec3A::from(self.vertices[1]);
-    let p2 = Vec3A::from(self.vertices[2]);
-    let n0 = Vec3A::from(self.normals[0]);
-    let n1 = Vec3A::from(self.normals[1]);
-    let n2 = Vec3A::from(self.normals[2]);
+    let uvs = self.uvs();
+    let [p0, p1, p2] = self.points().map(|p| glam::Vec3A::from(p));
+    let [n0, n1, n2] = self.normals().map(|n| glam::Vec3A::from(n));
 
     // compute plane's normal
     let v0v1 = p1 - p0;
@@ -147,27 +212,17 @@ impl Shape for Triangle {
     assert!(v >= 0.0 && v <= 1.0, "u={}, v={}, w={}", u, v, w);
     // assert!(w >= 0.0, "u={}, v={}, w={}", u, v, w);
 
-    hit.shape = Some(self);
     hit.p = p;
     hit.t = t.min(hit.t);
     hit.ng = ng;
     hit.ns = (n0 * u + n1 * v + n2 * w).normalize();
     hit.front = hit.ng.dot(-ray.direction) > 0.0;
 
-    let texcoords = match self.texcoords {
-      Some(texcoords) => texcoords,
-      None => [
-        Vec2::new(0.0, 0.0),
-        Vec2::new(1.0, 0.0),
-        Vec2::new(1.0, 1.0),
-      ],
-    };
-
     let dp1 = p1 - p0;
     let dp2 = p2 - p0;
-    let duv1 = texcoords[1] - texcoords[0];
-    let duv2 = texcoords[2] - texcoords[0];
-    hit.uv = texcoords[0] * u + texcoords[1] * v + texcoords[2] * w;
+    let duv1 = uvs[1] - uvs[0];
+    let duv2 = uvs[2] - uvs[0];
+    hit.uv = uvs[0] * u + uvs[1] * v + uvs[2] * w;
     let determinant = duv1.x * duv2.y - duv1.y * duv2.x;
     // Handle degenerate uv
     if determinant.abs() < 1e-8 {
@@ -181,18 +236,12 @@ impl Shape for Triangle {
     true //this ray hits the triangle
   }
 }
-
 impl Bounded for Triangle {
   fn aabb(&self) -> bvh::aabb::AABB {
-    let min = self
-      .vertices
-      .iter()
-      .fold(Vec3::splat(f32::INFINITY), |acc, x| acc.min(*x));
-    let max = self
-      .vertices
-      .iter()
-      .fold(Vec3::splat(-f32::INFINITY), |acc, x| acc.max(*x));
-    AABB::with_bounds(
+    let [p0, p1, p2] = self.points();
+    let min = glam::Vec3::splat(f32::INFINITY).min(p0).min(p1).min(p2);
+    let max = glam::Vec3::splat(-f32::INFINITY).max(p0).max(p1).max(p2);
+    bvh::aabb::AABB::with_bounds(
       bvh::Vector3::new(min.x, min.y, min.z),
       bvh::Vector3::new(max.x, max.y, max.z),
     )

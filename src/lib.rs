@@ -5,7 +5,10 @@ mod math;
 mod prefabs;
 mod raytrace;
 
-use std::{io::Empty, sync::{RwLock, Arc}};
+use std::{
+  io::Empty,
+  sync::{Arc, RwLock},
+};
 
 use gfx::*;
 use rand::Rng;
@@ -106,6 +109,7 @@ impl Application {
   fn start(&mut self) {
     let top_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, 0.0, -1.0), 0.5);
     let bottom_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, -100.5, -1.0), 100.0);
+    let camera = prefabs::Camera::perspective(60f32.to_radians(), 1.0, 0.01, 1000.0);
     self.state.start();
   }
   fn update(&mut self) {
@@ -767,7 +771,10 @@ impl RaytraceState {
 impl AppState for RaytraceState {
   fn start(&mut self) {
     self.scene_engine.write().unwrap().translate(&app().scene);
-    self.render_engine.render_frame(self.scene_engine.clone());
+    let context = self
+      .render_engine
+      .prepare_render(&self.scene_engine.read().unwrap());
+    self.render_engine.render_frame(context);
   }
 
   fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
