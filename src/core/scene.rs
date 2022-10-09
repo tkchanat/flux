@@ -1,5 +1,12 @@
-use crate::{app, prefabs::{GeomSphere, Camera}, gfx::Transform};
-use specs::{Builder, Component, DenseVecStorage, Entity, World, WorldExt};
+use crate::{
+  app,
+  gfx::Transform,
+  prefabs::{Camera, GeomSphere, Mesh},
+};
+use specs::{
+  join::JoinIter, Builder, Component, DenseVecStorage, DispatcherBuilder, Entity, Join,
+  ReadStorage, System, World, WorldExt,
+};
 use specs_derive::Component;
 use std::{
   collections::VecDeque,
@@ -213,6 +220,7 @@ impl Scene {
     world.register::<GeomSphere>();
     world.register::<Transform>();
     world.register::<Camera>();
+    world.register::<Mesh>();
 
     let handle = Arc::new(RwLock::new(world));
     let root = Node {

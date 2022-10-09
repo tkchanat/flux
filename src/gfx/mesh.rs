@@ -38,8 +38,8 @@ pub struct Mesh {
 }
 
 impl Mesh {
-  pub fn sphere() -> Self {
-    let uv_sphere = procedural::create_uv_sphere(10, 10);
+  pub fn sphere(segments: u16, rings: u16, radius: f32) -> Self {
+    let uv_sphere = procedural::create_uv_sphere(segments, rings, radius);
     let vertices = itertools::izip!(&uv_sphere.positions, &uv_sphere.texcoords.unwrap())
       .map(|(position, tex_coords)| Vertex {
         position: *position,

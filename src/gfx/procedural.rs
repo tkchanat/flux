@@ -9,10 +9,9 @@ pub struct ProceduralMesh {
   pub colors: Option<Vec<[f32; 3]>>,
 }
 
-pub fn create_uv_sphere(segments: u16, rings: u16) -> ProceduralMesh {
+pub fn create_uv_sphere(segments: u16, rings: u16, radius: f32) -> ProceduralMesh {
   let mut positions = Vec::new();
   let mut texcoords = Vec::new();
-  let radius = 1.0;
 
   // Vertices
   positions.push([0.0, radius, 0.0]);

@@ -18,26 +18,18 @@ pub struct PinholeCamera {
 }
 
 impl PinholeCamera {
-  pub fn new(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+  pub fn new(fov_y: f32, aspect: f32, near: f32, far: f32, world_to_view: glam::Affine3A) -> Self {
     let view_to_ndc = Mat4::perspective_rh(fov_y, aspect, near, far);
     Self {
       fov_y,
       aspect,
       near,
       far,
-      world_to_view: Affine3A::IDENTITY,
-      view_to_world: Affine3A::IDENTITY,
+      world_to_view,
+      view_to_world: world_to_view.inverse(),
       view_to_ndc,
       ndc_to_view: view_to_ndc.inverse(),
     }
-  }
-
-  pub fn look_at(&mut self, eye: Vec3, target: Vec3, up: Vec3) {
-    let ez = (eye - target).normalize();
-    let ex = up.cross(ez).normalize();
-    let ey = ez.cross(ex);
-    self.world_to_view = Affine3A::from_mat3_translation(Mat3::from_cols(ex, ey, ez), eye);
-    self.view_to_world = self.world_to_view.inverse();
   }
 }
 

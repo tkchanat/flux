@@ -21,7 +21,7 @@ use crate::{
 };
 use glam::{Vec2, Vec3};
 use std::{
-  sync::{Arc, RwLock},
+  sync::{Arc, RwLock, RwLockReadGuard, Weak},
   thread,
 };
 
@@ -50,8 +50,7 @@ pub struct RenderEngine {
 pub struct RenderContext {
   settings: RenderSettings,
   accelerator: Arc<Accelerator>,
-  cameras: Vec<Arc<dyn Camera>>,
-  active_camera: usize,
+  camera: Weak<dyn Camera>,
 }
 
 impl RenderEngine {
@@ -68,21 +67,19 @@ impl RenderEngine {
     let accelerator = Arc::new(Accelerator::build(&scene));
     println!("BVH building took: {:?}", timer.elapsed());
 
-    let mut camera = PinholeCamera::new(60f32.to_radians(), 1.0, 0.01, 1000.0);
-    camera.look_at(Vec3::new(2.0, 1.0, 2.0), Vec3::new(0.0, 0.0, 0.0), Vec3::Y);
+    let camera = Arc::downgrade(&scene.cameras[scene.active_cam]);
 
     RenderContext {
       settings: self.settings.clone(),
       accelerator,
-      cameras: vec![Arc::new(camera)],
-      active_camera: 0,
+      camera,
     }
   }
   pub fn render_frame(&self, context: RenderContext) {
     let width = context.settings.resolution.0;
     let height = context.settings.resolution.1;
     let film_handle = self.film.clone();
-    let camera = context.cameras[context.active_camera].clone();
+    let camera = context.camera.upgrade().expect("Camera no longer exists");
 
     thread::spawn(move || {
       let timer = Timer::new();

@@ -88,7 +88,7 @@ pub struct TriangleMesh {
   world_to_object: glam::Affine3A,
 }
 impl TriangleMesh {
-  fn new(
+  pub fn new(
     points: Vec<glam::Vec3>,
     normals: Vec<glam::Vec3>,
     texcoords: Option<Vec<glam::Vec2>>,

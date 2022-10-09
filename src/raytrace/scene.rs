@@ -1,10 +1,13 @@
-use super::{camera::Camera, shape::TriangleMesh};
-use crate::{core::Read, gfx::Transform, prefabs::GeomSphere};
+use super::{
+  camera::{Camera, PinholeCamera},
+  shape::{Triangle, TriangleMesh},
+};
+use crate::{core::Read, gfx::Transform, prefabs};
 use std::sync::Arc;
 
 pub(super) enum Primitive {
   Empty,
-  Camera(Box<dyn Camera>),
+  Camera(Arc<dyn Camera>),
   Sphere(glam::Vec3, f32),
   TriangleMesh(Arc<TriangleMesh>),
 }
@@ -16,6 +19,8 @@ pub(super) struct Node {
 
 pub struct SceneEngine {
   pub(super) root: Node,
+  pub(super) cameras: Vec<Arc<dyn Camera>>,
+  pub(super) active_cam: usize,
 }
 impl SceneEngine {
   pub fn new() -> Self {
@@ -24,6 +29,8 @@ impl SceneEngine {
         prim: Primitive::Empty,
         children: Vec::new(),
       },
+      cameras: Vec::new(),
+      active_cam: 0,
     }
   }
   pub fn translate(&mut self, scene: &crate::core::Scene) {
@@ -33,8 +40,45 @@ impl SceneEngine {
     let prim = {
       if let Some(transform) = node.get_component::<Read<Transform>>() {
         let transform = transform.matrix().clone();
-        if let Some(sphere) = node.get_component::<Read<GeomSphere>>() {
+        if let Some(sphere) = node.get_component::<Read<prefabs::GeomSphere>>() {
           Primitive::Sphere(transform.translation.into(), sphere.radius)
+        } else if let Some(mesh) = node.get_component::<Read<prefabs::Mesh>>() {
+          let mesh_data = mesh
+            .try_get_data()
+            .expect("Mesh data should not be dropped");
+          let points = mesh_data.vertices.clone();
+          let normals = mesh_data.normals.clone();
+          let texcoords = mesh_data.uvs.clone();
+          let indices = mesh_data.indices.clone();
+          let tri_count = (indices.len() / 3) as u32;
+          let object_to_world = transform;
+          let world_to_object = object_to_world.inverse();
+          Primitive::TriangleMesh(Arc::new(TriangleMesh::new(
+            points,
+            normals,
+            texcoords,
+            indices,
+            tri_count,
+            object_to_world,
+            world_to_object,
+          )))
+        } else if let Some(camera) = node.get_component::<Read<prefabs::Camera>>() {
+          let (near, far) = camera.clipping_planes;
+          let camera = match camera.projection {
+            prefabs::Projection::Perspective {
+              field_of_view,
+              aspect,
+            } => Arc::new(PinholeCamera::new(field_of_view, aspect, near, far, transform)),
+            prefabs::Projection::Orthographic {
+              top,
+              bottom,
+              left,
+              right,
+            } => todo!(),
+          };
+          self.cameras.push(camera.clone());
+          self.active_cam = 0;
+          Primitive::Camera(camera)
         } else {
           Primitive::Empty
         }

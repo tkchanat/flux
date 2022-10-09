@@ -1,4 +1,4 @@
-use crate::core::Node;
+use crate::{core::Node, gfx::Transform};
 use specs::{Component, DenseVecStorage};
 use specs_derive::Component;
 
@@ -23,6 +23,7 @@ pub struct Camera {
 impl Camera {
   pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Node {
     let node = Node::new();
+    node.add_component(Transform::default());
     node.add_component(Camera {
       projection: Projection::Perspective {
         field_of_view: fov_y,

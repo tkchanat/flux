@@ -79,7 +79,7 @@ impl Application {
       quit_requested: false,
       window,
       input_system: InputSystem::new(),
-      state: Box::new(RaytraceState::new()),
+      state: Box::new(RealtimeState::new()),
       scene: core::Scene::new(),
     }
   }
@@ -107,9 +107,10 @@ impl Application {
     app().input_system.handle_event(event);
   }
   fn start(&mut self) {
-    let top_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, 0.0, -1.0), 0.5);
-    let bottom_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, -100.5, -1.0), 100.0);
-    let camera = prefabs::Camera::perspective(60f32.to_radians(), 1.0, 0.01, 1000.0);
+    // Two spheres
+    let _top_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, 0.0, -1.0), 0.5);
+    let _bottom_sphere = prefabs::GeomSphere::new(glam::Vec3::new(0.0, -100.5, -1.0), 100.0);
+    let _camera = prefabs::Camera::perspective(90f32.to_radians(), 1.0, 0.01, 1000.0);
     self.state.start();
   }
   fn update(&mut self) {
@@ -405,7 +406,7 @@ struct RealtimeState {
 impl RealtimeState {
   fn new() -> Self {
     let axis_helper_buffer = gfx::VertexBuffer::new(bytemuck::cast_slice(AXIS_HELPER_VERTICES));
-    let sphere = gfx::Mesh::sphere();
+    let sphere = gfx::Mesh::sphere(10, 10, 1.0);
 
     let mut rng = rand::thread_rng();
     let positions = (0..1000)

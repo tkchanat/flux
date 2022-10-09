@@ -1,7 +1,7 @@
 use specs::{Component, DenseVecStorage};
 use specs_derive::Component;
 
-#[derive(Component)]
+#[derive(Component, Default)]
 pub struct Transform {
   affine: glam::Affine3A,
 }
@@ -29,6 +29,13 @@ impl Transform {
     Self {
       affine: glam::Affine3A::from_scale_rotation_translation(scale, rotation, translation),
     }
+  }
+  pub fn look_at(eye: glam::Vec3, target: glam::Vec3, up: glam::Vec3) -> Self {
+    let ez = (eye - target).normalize();
+    let ex = up.cross(ez).normalize();
+    let ey = ez.cross(ex);
+    let affine = glam::Affine3A::from_mat3_translation(glam::Mat3::from_cols(ex, ey, ez), eye);
+    Self { affine }
   }
   pub fn matrix(&self) -> &glam::Affine3A {
     &self.affine
