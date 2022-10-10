@@ -5,13 +5,15 @@ mod math;
 mod prefabs;
 mod raytrace;
 
+use crate::core::Node;
+use gfx::*;
+use rand::Rng;
+use specs::{Component, DenseVecStorage};
+use specs_derive::Component;
 use std::{
   io::Empty,
   sync::{Arc, RwLock},
 };
-
-use gfx::*;
-use rand::Rng;
 use winit::{
   dpi::PhysicalSize,
   event::*,
@@ -206,7 +208,10 @@ impl InputSystem {
       }
       WindowEvent::MouseWheel { delta, .. } => match delta {
         MouseScrollDelta::LineDelta(dx, dy) => self.scroll_delta = (*dx, *dy),
-        MouseScrollDelta::PixelDelta(_) => unreachable!(),
+        MouseScrollDelta::PixelDelta(delta) => {
+          let (dx, dy) = (delta.x * 0.1, delta.y * 0.1);
+          self.scroll_delta = (dx as f32, dy as f32)
+        }
       },
       WindowEvent::KeyboardInput { input, .. } => {
         let pressed = input.state == ElementState::Pressed;
@@ -564,8 +569,17 @@ impl RealtimeState {
     }
   }
 }
-
+#[derive(Component)]
+struct Test(i32);
 impl AppState for RealtimeState {
+  fn start(&mut self) {
+    app().scene.observe::<Test, _>(|node: &Node, comp: &Test| {
+      println!("id = {:?}", comp.0);
+    });
+    let node = Node::new();
+    node.add_component(Test(1));
+  }
+
   fn update(&mut self, input: &InputSystem) {
     self.camera.update(&input);
   }
@@ -609,6 +623,8 @@ impl AppState for RealtimeState {
         render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
         render_pass.draw_indexed(0..(self.sphere.index_count), 0, 0..1000);
       }
+
+      app().scene.each::<prefabs::Mesh, _>(|mesh| {});
 
       // // axis helper
       // render_pass.set_pipeline(&self.pipeline_axis_helper);

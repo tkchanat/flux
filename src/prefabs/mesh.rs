@@ -11,7 +11,7 @@ impl Mesh {
     vertices: Vec<glam::Vec3>,
     normals: Vec<glam::Vec3>,
     uvs: Option<Vec<glam::Vec2>>,
-    indices: Vec<u32>
+    indices: Option<Vec<u32>>
   ) -> Self {
     Self {
       data: Some(Box::new(MeshData {
@@ -44,5 +44,5 @@ pub struct MeshData {
   pub vertices: Vec<glam::Vec3>,
   pub normals: Vec<glam::Vec3>,
   pub uvs: Option<Vec<glam::Vec2>>,
-  pub indices: Vec<u32>,
+  pub indices: Option<Vec<u32>>,
 }

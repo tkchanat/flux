@@ -3,11 +3,13 @@ use crate::{
   gfx::Transform,
   prefabs::{Camera, GeomSphere, Mesh},
 };
+use core::any::TypeId;
 use specs::{
-  join::JoinIter, Builder, Component, DenseVecStorage, DispatcherBuilder, Entity, Join,
-  ReadStorage, System, World, WorldExt,
+  Builder, Component, DenseVecStorage, DispatcherBuilder, Entity, Join, ReadStorage, System, World,
+  WorldExt,
 };
 use specs_derive::Component;
+use std::collections::HashMap;
 use std::{
   collections::VecDeque,
   ops::{Deref, DerefMut},
@@ -178,6 +180,13 @@ impl Node {
     child
   }
   pub fn add_component<C: Component>(&self, component: C) {
+    let type_id = TypeId::of::<C>();
+    if let Some(observers) = app().scene.observers.get(&type_id) {
+      for obs in observers {
+        let cb = &obs.as_any().downcast_ref::<Observer<C>>().unwrap().cb;
+        cb(&self, &component);
+      }
+    }
     self
       .world
       .upgrade()
@@ -207,13 +216,66 @@ impl Node {
     T::compose(&rwlock, entity)
   }
 }
-
+pub trait Depends {
+  fn on_added<C: Component>(node: &Node, component: &C)
+  where
+    Self: Sized;
+}
+// #[derive(Component)]
+// struct Test(i32);
+// impl Depends for Test {
+//   fn on_added<C: Component>(node: &Node, component: &C)
+//   where
+//     Self: Sized,
+//   {
+//     todo!()
+//   }
+// }
+// impl<C: Component> Depends for fn(&Node, &C) {
+//   fn on_added<C: Component>(node: &Node, component: &C)
+//   where
+//     Self: Sized,
+//   {
+//     todo!()
+//   }
+// }
+// #[test]
+// fn test() {
+//   let mut scene = Scene::new();
+//   let node = scene.create_node(None);
+//   node.add_component(Test(1));
+//   scene.observe::<Test, _>(|node: &Node, comp: &Test| {
+//     println!("id = {:?}", comp.0);
+//   });
+// }
+trait AsAny {
+  fn as_any(&self) -> &dyn std::any::Any;
+}
+struct Observer<C: Component> {
+  cb: Box<dyn Fn(&Node, &C)>,
+}
+impl<C: Component> AsAny for Observer<C> {
+  fn as_any(&self) -> &dyn std::any::Any {
+    self as &dyn std::any::Any
+  }
+}
 pub struct Scene {
   world: Arc<RwLock<World>>,
   pending_kill: VecDeque<Entity>,
+  observers: HashMap<TypeId, Vec<Box<dyn AsAny>>>,
   pub root: Node,
 }
 impl Scene {
+  pub fn observe<C: Component, F: Fn(&Node, &C) + 'static>(&mut self, f: F) {
+    let type_id = TypeId::of::<C>();
+    let obs = Box::new(Observer::<C> { cb: Box::new(f) });
+    match self.observers.get_mut(&type_id) {
+      Some(observers) => observers.push(obs),
+      None => {
+        self.observers.insert(type_id, vec![obs]);
+      }
+    }
+  }
   pub fn new() -> Self {
     let mut world = World::new();
     world.register::<Relationship>();
@@ -221,6 +283,7 @@ impl Scene {
     world.register::<Transform>();
     world.register::<Camera>();
     world.register::<Mesh>();
+    world.register::<crate::Test>();
 
     let handle = Arc::new(RwLock::new(world));
     let root = Node {
@@ -235,6 +298,7 @@ impl Scene {
     Self {
       world: handle,
       root,
+      observers: HashMap::new(),
       pending_kill: VecDeque::new(),
     }
   }
@@ -270,6 +334,12 @@ impl Scene {
         .expect("Unable to delete entity");
     }
   }
+  pub fn each<T: Component, F: FnMut(&T)>(&self, mut f: F) {
+    let world = self.world.read().unwrap();
+    for s in world.write_storage::<T>().join() {
+      f(s);
+    }
+  }
 }
 impl Drop for Scene {
   fn drop(&mut self) {
@@ -281,3 +351,69 @@ impl Drop for Scene {
       .expect("Unable to delete entity");
   }
 }
+
+// trait IObserver {
+//   fn update<C: Component>(&mut self, node: &Node, component: &C);
+// }
+
+// trait ISubject<'a, T: IObserver> {
+//   fn attach(&mut self, observer: &'a mut T);
+//   fn detach(&mut self, observer: &'a T);
+//   fn notify_observers(&mut self);
+// }
+
+// struct Subject<'a, T: IObserver> {
+//   observers: Vec<&'a mut T>,
+// }
+// impl<'a, T: IObserver + PartialEq> Subject<'a, T> {
+//   fn new() -> Subject<'a, T> {
+//     Subject {
+//       observers: Vec::new(),
+//     }
+//   }
+// }
+
+// impl<'a, T: IObserver + PartialEq> ISubject<'a, T> for Subject<'a, T> {
+//   fn attach(&mut self, observer: &'a mut T) {
+//     self.observers.push(observer);
+//   }
+//   fn detach(&mut self, observer: &'a T) {
+//     if let Some(idx) = self.observers.iter().position(|x| *x == observer) {
+//       self.observers.remove(idx);
+//     }
+//   }
+//   fn notify_observers(&mut self) {
+//     for item in self.observers.iter_mut() {
+//       let node = Node::new();
+//       let test = Test {};
+//       item.update(&node, &test);
+//     }
+//   }
+// }
+
+// #[derive(Component)]
+// struct Test;
+
+// #[derive(PartialEq)]
+// struct ConcreteObserver {
+//   id: i32,
+// }
+// impl IObserver for ConcreteObserver {
+//   fn update<C: Component>(&mut self, node: &Node, component: &C) {
+//     println!("Observer id:{} received event!", self.id);
+//   }
+// }
+
+// #[test]
+// fn test_observer() {
+//   let mut subject = Subject::new();
+//   let mut observer_a = ConcreteObserver { id: 1 };
+//   let mut observer_b = ConcreteObserver { id: 2 };
+
+//   subject.attach(&mut observer_a);
+//   subject.attach(&mut observer_b);
+//   subject.notify_observers();
+
+//   subject.detach(&observer_b);
+//   subject.notify_observers();
+// }

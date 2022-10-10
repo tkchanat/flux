@@ -49,8 +49,13 @@ impl SceneEngine {
           let points = mesh_data.vertices.clone();
           let normals = mesh_data.normals.clone();
           let texcoords = mesh_data.uvs.clone();
-          let indices = mesh_data.indices.clone();
-          let tri_count = (indices.len() / 3) as u32;
+          let (indices, tri_count) = match &mesh_data.indices {
+            Some(indices) => (indices.clone(), (indices.len() / 3) as u32),
+            None => (
+              (0..points.len()).map(|x| x as u32).collect::<Vec<_>>(),
+              (points.len() / 3) as u32,
+            ),
+          };
           let object_to_world = transform;
           let world_to_object = object_to_world.inverse();
           Primitive::TriangleMesh(Arc::new(TriangleMesh::new(
@@ -68,7 +73,13 @@ impl SceneEngine {
             prefabs::Projection::Perspective {
               field_of_view,
               aspect,
-            } => Arc::new(PinholeCamera::new(field_of_view, aspect, near, far, transform)),
+            } => Arc::new(PinholeCamera::new(
+              field_of_view,
+              aspect,
+              near,
+              far,
+              transform,
+            )),
             prefabs::Projection::Orthographic {
               top,
               bottom,

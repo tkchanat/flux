@@ -1,7 +1,11 @@
+use specs::{Component, DenseVecStorage};
+use specs_derive::Component;
+
 use super::{
   buffer::{IndexBuffer, VertexBuffer},
   procedural,
 };
+use crate::core::Node;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -31,11 +35,43 @@ impl Vertex {
   }
 }
 
+// trait Depends<T: Component> {
+//   fn on_added(&mut self, node: &Node, component: &T);
+// }
+
+#[derive(Component)]
 pub struct Mesh {
   pub vertex_buffer: VertexBuffer,
   pub index_buffer: Option<IndexBuffer>,
   pub index_count: u32,
 }
+
+// impl Depends<crate::prefabs::Mesh> for Mesh {
+//   fn on_added(&mut self, node: &Node, mesh: &crate::prefabs::Mesh) {
+//     let mesh_data = mesh.try_get_data().expect("Mesh must have data");
+//     let vertices = itertools::izip!(&mesh_data.vertices, mesh_data.uvs.as_ref().unwrap())
+//       .map(|(position, tex_coords)| Vertex {
+//         position: position.to_array(),
+//         tex_coords: tex_coords.to_array(),
+//       })
+//       .collect::<Vec<_>>();
+//     let vertex_buffer = VertexBuffer::new(bytemuck::cast_slice(vertices.as_slice()));
+//     let (index_buffer, index_count) = match &mesh_data.indices {
+//       Some(indices) => (
+//         Some(IndexBuffer::new(bytemuck::cast_slice(indices.as_slice()))),
+//         indices.len() as u32,
+//       ),
+//       None => (None, 0),
+//     };
+
+//     node.add_component(Mesh {
+//       vertex_buffer,
+//       index_buffer,
+//       index_count,
+//     });
+//     println!("gfx::Mesh added!");
+//   }
+// }
 
 impl Mesh {
   pub fn sphere(segments: u16, rings: u16, radius: f32) -> Self {
