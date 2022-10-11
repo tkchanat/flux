@@ -39,7 +39,7 @@ impl SceneEngine {
   fn translate_node(&mut self, node: &crate::core::Node) -> Node {
     let prim = {
       if let Some(transform) = node.get_component::<Read<Transform>>() {
-        let transform = transform.matrix().clone();
+        let transform = transform.affine().clone();
         if let Some(sphere) = node.get_component::<Read<prefabs::GeomSphere>>() {
           Primitive::Sphere(transform.translation.into(), sphere.radius)
         } else if let Some(mesh) = node.get_component::<Read<prefabs::Mesh>>() {

@@ -33,4 +33,19 @@ impl Camera {
     });
     node
   }
+  pub fn projection(&self) -> glam::Mat4 {
+    let (near, far) = self.clipping_planes;
+    match &self.projection {
+      Projection::Perspective {
+        field_of_view,
+        aspect,
+      } => glam::Mat4::perspective_rh(*field_of_view, *aspect, near, far),
+      Projection::Orthographic {
+        top,
+        bottom,
+        left,
+        right,
+      } => todo!(),
+    }
+  }
 }

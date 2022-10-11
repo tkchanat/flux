@@ -1,5 +1,9 @@
-mod scene;
+pub mod scene;
+pub mod app;
+pub mod input;
+pub use app::*;
 pub use scene::*;
+pub use input::*;
 
 // use std::time::{Duration, Instant};
 use instant::{Instant, Duration};

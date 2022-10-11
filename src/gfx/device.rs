@@ -1,32 +1,5 @@
+use crate::core::app;
 use wgpu::util::DeviceExt;
-
-use crate::math;
-
-static mut RENDER_DEVICE: Option<RenderDevice> = None;
-
-pub(crate) fn init_render_device(window: &winit::window::Window) {
-  unsafe {
-    assert!(RENDER_DEVICE.is_none());
-  }
-  let device = RenderDevice::new(window);
-  unsafe {
-    RENDER_DEVICE = Some(device);
-  }
-}
-
-pub(crate) fn drop_render_device() {
-  unsafe {
-    RENDER_DEVICE = None;
-  }
-}
-
-pub(crate) fn context() -> &'static mut RenderDevice {
-  unsafe {
-    RENDER_DEVICE
-      .as_mut()
-      .expect("Render device not initialized yet")
-  }
-}
 
 pub struct RenderDevice {
   surface: wgpu::Surface,
@@ -53,13 +26,17 @@ impl RenderDevice {
 
     let (device, queue) = pollster::block_on(adapter.request_device(
       &wgpu::DeviceDescriptor {
-        features: wgpu::Features::empty(),
+        features: wgpu::Features::PUSH_CONSTANTS,
         // WebGL doesn't support all of wgpu's features, so if
         // we're building for the web we'll have to disable some.
-        limits: if cfg!(target_arch = "wasm32") {
-          wgpu::Limits::downlevel_webgl2_defaults()
-        } else {
-          wgpu::Limits::default()
+        limits: {
+          let mut limit = if cfg!(target_arch = "wasm32") {
+            wgpu::Limits::downlevel_webgl2_defaults()
+          } else {
+            wgpu::Limits::default()
+          };
+          limit.max_push_constant_size = 128;
+          limit
         },
         label: None,
       },

@@ -1,4 +1,4 @@
-use super::device::*;
+use super::RenderDevice;
 
 pub struct Texture2D {
   handle: wgpu::Texture,
@@ -9,6 +9,7 @@ pub struct Texture2D {
 
 impl Texture2D {
   pub fn new(
+    device: &RenderDevice,
     label: Option<&str>,
     size: wgpu::Extent3d,
     mip_level_count: u32,
@@ -17,7 +18,7 @@ impl Texture2D {
     format: wgpu::TextureFormat,
     usage: wgpu::TextureUsages,
   ) -> Self {
-    let handle = context().create_texture(
+    let handle = device.create_texture(
       label,
       size,
       mip_level_count,
@@ -35,10 +36,10 @@ impl Texture2D {
     }
   }
 
-  pub fn update(&self, data: &[u8]) {
+  pub fn update(&self, device: &RenderDevice, data: &[u8]) {
     let x_stride = self.format.describe().block_size as u32;
     let y_stride = self.size.width * x_stride;
-    context().update_texture(
+    device.update_texture(
       // Tells wgpu where to copy the pixel data
       wgpu::ImageCopyTexture {
         texture: &self.handle,

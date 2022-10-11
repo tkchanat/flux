@@ -11,6 +11,9 @@ impl Transform {
       affine: glam::Affine3A::IDENTITY,
     }
   }
+  pub fn translation(&self) -> glam::Vec3A {
+    self.affine.translation
+  }
   pub fn from_translation(translation: glam::Vec3) -> Self {
     Self {
       affine: glam::Affine3A::from_translation(translation),
@@ -37,7 +40,15 @@ impl Transform {
     let affine = glam::Affine3A::from_mat3_translation(glam::Mat3::from_cols(ex, ey, ez), eye);
     Self { affine }
   }
-  pub fn matrix(&self) -> &glam::Affine3A {
+  pub fn affine(&self) -> &glam::Affine3A {
     &self.affine
+  }
+  pub fn to_matrix(&self) -> glam::Mat4 {
+    glam::Mat4::from(self.affine)
+  }
+}
+impl From<glam::Affine3A> for Transform {
+  fn from(affine: glam::Affine3A) -> Self {
+    Self { affine }
   }
 }

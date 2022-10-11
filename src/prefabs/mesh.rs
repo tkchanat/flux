@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 use crate::{core::Node, gfx::Transform};
 use specs::{Component, DenseVecStorage};
 use specs_derive::Component;
@@ -11,14 +13,14 @@ impl Mesh {
     vertices: Vec<glam::Vec3>,
     normals: Vec<glam::Vec3>,
     uvs: Option<Vec<glam::Vec2>>,
-    indices: Option<Vec<u32>>
+    indices: Option<Vec<u32>>,
   ) -> Self {
     Self {
       data: Some(Box::new(MeshData {
         vertices,
         normals,
         uvs,
-        indices
+        indices,
       })),
     }
   }

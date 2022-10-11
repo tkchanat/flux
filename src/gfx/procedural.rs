@@ -18,7 +18,7 @@ pub fn create_uv_sphere(segments: u16, rings: u16, radius: f32) -> ProceduralMes
   texcoords.push([0.0, 0.0]);
   for j in 1..rings {
     let v = j as f32 / (rings - 1) as f32;
-    let polar = PI * j as f32 / rings as f32 * radius;
+    let polar = PI * j as f32 / rings as f32;
     let sp = polar.sin();
     let cp = polar.cos();
     for i in 0..segments {
@@ -26,9 +26,9 @@ pub fn create_uv_sphere(segments: u16, rings: u16, radius: f32) -> ProceduralMes
       let azimuth = 2.0 * PI * i as f32 / segments as f32;
       let sa = azimuth.sin();
       let ca = azimuth.cos();
-      let x = sp * ca;
+      let x = sp * ca * radius;
       let y = cp * radius;
-      let z = sp * sa;
+      let z = sp * sa * radius;
       positions.push([x, y, z]);
       texcoords.push([u, v]);
     }

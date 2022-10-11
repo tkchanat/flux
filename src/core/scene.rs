@@ -1,19 +1,17 @@
-use crate::{
-  app,
-  gfx::Transform,
-  prefabs::{Camera, GeomSphere, Mesh},
-};
+use crate::{gfx, prefabs};
+use super::app;
 use core::any::TypeId;
 use specs::{
   Builder, Component, DenseVecStorage, DispatcherBuilder, Entity, Join, ReadStorage, System, World,
   WorldExt,
 };
 use specs_derive::Component;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 use std::{
   collections::VecDeque,
   ops::{Deref, DerefMut},
-  sync::{Arc, RwLock, RwLockReadGuard, Weak},
 };
 
 #[derive(Component, Default)]
@@ -30,7 +28,7 @@ impl<C: Component> Deref for Read<C> {
   }
 }
 impl<C: Component> Composable for Read<C> {
-  fn get(world: &RwLockReadGuard<World>, entity: Entity) -> Self {
+  fn get(world: &RefMut<World>, entity: Entity) -> Self {
     let ptr = match world.read_component::<C>().get(entity) {
       Some(component) => component as *const C,
       None => std::ptr::null(),
@@ -54,7 +52,7 @@ impl<C: Component> DerefMut for Write<C> {
   }
 }
 impl<C: Component> Composable for Write<C> {
-  fn get(world: &RwLockReadGuard<World>, entity: Entity) -> Self {
+  fn get(world: &RefMut<World>, entity: Entity) -> Self {
     let ptr = match world.write_component::<C>().get_mut(entity) {
       Some(component) => component as *mut C,
       None => std::ptr::null_mut(),
@@ -67,12 +65,12 @@ impl<C: Component> Composable for Write<C> {
 }
 
 pub trait ComponentsTuple {
-  fn compose(world: &RwLockReadGuard<World>, entity: Entity) -> Option<Self>
+  fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self>
   where
     Self: Sized;
 }
 impl<A: Composable> ComponentsTuple for A {
-  fn compose(world: &RwLockReadGuard<World>, entity: Entity) -> Option<Self> {
+  fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self> {
     let a = A::get(world, entity);
     if A::valid(&a) {
       Some(a)
@@ -85,7 +83,7 @@ macro_rules! impl_compose {
   ($($a:ident)+) => {
     impl<$($a: Composable),+> ComponentsTuple for ($($a,)+) {
       #[allow(non_snake_case)]
-      fn compose(world: &RwLockReadGuard<World>, entity: Entity) -> Option<Self> {
+      fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self> {
         let tuple = ($($a::get(world, entity),)+);
         let ($($a,)+) = tuple;
         // let (a, b) = (A::get(world, entity), B::get(world, entity));
@@ -109,13 +107,13 @@ impl_compose! { A B C D E F G }
 impl_compose! { A B C D E F G H }
 
 trait Composable {
-  fn get(world: &RwLockReadGuard<World>, entity: Entity) -> Self;
+  fn get(world: &RefMut<World>, entity: Entity) -> Self;
   fn valid(&self) -> bool;
 }
 
 pub struct Node {
   entity: Entity,
-  world: Weak<RwLock<World>>,
+  world: Weak<RefCell<specs::World>>,
 }
 impl Node {
   pub fn new() -> Self {
@@ -181,7 +179,8 @@ impl Node {
   }
   pub fn add_component<C: Component>(&self, component: C) {
     let type_id = TypeId::of::<C>();
-    if let Some(observers) = app().scene.observers.get(&type_id) {
+    let observers = app().scene.observers.borrow();
+    if let Some(observers) = observers.get(&type_id) {
       for obs in observers {
         let cb = &obs.as_any().downcast_ref::<Observer<C>>().unwrap().cb;
         cb(&self, &component);
@@ -191,8 +190,7 @@ impl Node {
       .world
       .upgrade()
       .expect("World no longer exists")
-      .write()
-      .unwrap()
+      .borrow_mut()
       .write_component::<C>()
       .insert(self.entity, component)
       .expect("Unable to add component to entity");
@@ -202,8 +200,7 @@ impl Node {
       .world
       .upgrade()
       .expect("World no longer exists")
-      .write()
-      .unwrap()
+      .borrow_mut()
       .write_component::<C>()
       .remove(self.entity)
   }
@@ -212,42 +209,11 @@ impl Node {
   }
   fn get_component_impl<T: ComponentsTuple>(&self, entity: Entity) -> Option<T> {
     let world = self.world.upgrade().expect("World no longer exists");
-    let rwlock = world.read().unwrap();
-    T::compose(&rwlock, entity)
+    let x = T::compose(&world.borrow_mut(), entity);
+    x
   }
+
 }
-pub trait Depends {
-  fn on_added<C: Component>(node: &Node, component: &C)
-  where
-    Self: Sized;
-}
-// #[derive(Component)]
-// struct Test(i32);
-// impl Depends for Test {
-//   fn on_added<C: Component>(node: &Node, component: &C)
-//   where
-//     Self: Sized,
-//   {
-//     todo!()
-//   }
-// }
-// impl<C: Component> Depends for fn(&Node, &C) {
-//   fn on_added<C: Component>(node: &Node, component: &C)
-//   where
-//     Self: Sized,
-//   {
-//     todo!()
-//   }
-// }
-// #[test]
-// fn test() {
-//   let mut scene = Scene::new();
-//   let node = scene.create_node(None);
-//   node.add_component(Test(1));
-//   scene.observe::<Test, _>(|node: &Node, comp: &Test| {
-//     println!("id = {:?}", comp.0);
-//   });
-// }
 trait AsAny {
   fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -260,45 +226,44 @@ impl<C: Component> AsAny for Observer<C> {
   }
 }
 pub struct Scene {
-  world: Arc<RwLock<World>>,
+  world: Rc<RefCell<specs::World>>,
   pending_kill: VecDeque<Entity>,
-  observers: HashMap<TypeId, Vec<Box<dyn AsAny>>>,
+  observers: RefCell<HashMap<TypeId, Vec<Box<dyn AsAny>>>>,
   pub root: Node,
 }
 impl Scene {
-  pub fn observe<C: Component, F: Fn(&Node, &C) + 'static>(&mut self, f: F) {
+  pub fn observe<C: Component, F: Fn(&Node, &C) + 'static>(&self, f: F) {
     let type_id = TypeId::of::<C>();
-    let obs = Box::new(Observer::<C> { cb: Box::new(f) });
-    match self.observers.get_mut(&type_id) {
-      Some(observers) => observers.push(obs),
+    let cb = Box::new(Observer::<C> { cb: Box::new(f) });
+    let mut observers = self.observers.borrow_mut();
+    match observers.get_mut(&type_id) {
+      Some(observers) => observers.push(cb),
       None => {
-        self.observers.insert(type_id, vec![obs]);
+        observers.insert(type_id, vec![cb]);
       }
     }
   }
   pub fn new() -> Self {
     let mut world = World::new();
     world.register::<Relationship>();
-    world.register::<GeomSphere>();
-    world.register::<Transform>();
-    world.register::<Camera>();
-    world.register::<Mesh>();
-    world.register::<crate::Test>();
+    world.register::<prefabs::GeomSphere>();
+    world.register::<prefabs::Camera>();
+    world.register::<gfx::Transform>();
+    world.register::<gfx::Mesh>();
 
-    let handle = Arc::new(RwLock::new(world));
+    let handle = Rc::new(RefCell::new(world));
     let root = Node {
       entity: handle
-        .write()
-        .unwrap()
+        .borrow_mut()
         .create_entity()
         .with::<Relationship>(Relationship::default())
         .build(),
-      world: Arc::downgrade(&handle),
+      world: Rc::downgrade(&handle),
     };
     Self {
       world: handle,
       root,
-      observers: HashMap::new(),
+      observers: RefCell::new(HashMap::new()),
       pending_kill: VecDeque::new(),
     }
   }
@@ -309,15 +274,14 @@ impl Scene {
     Node {
       entity: self
         .world
-        .write()
-        .unwrap()
+        .borrow_mut()
         .create_entity()
         .with::<Relationship>(Relationship {
           parent,
           children: Vec::new(),
         })
         .build(),
-      world: Arc::downgrade(&self.world),
+      world: Rc::downgrade(&self.world),
     }
   }
   fn destroy_node(&mut self, node: Node) {
@@ -328,15 +292,24 @@ impl Scene {
       let entity = self.pending_kill.pop_back().unwrap();
       self
         .world
-        .write()
-        .unwrap()
+        .borrow_mut()
         .delete_entity(entity)
         .expect("Unable to delete entity");
     }
   }
+  // pub fn storage<'a, C: Component>(&'a self) -> specs::ReadStorage<'a, C> {
+  //   self.world.borrow().read_storage::<C>()
+  // }
+  // pub fn storage_mut<'a, C: Component>(&'a self) -> specs::WriteStorage<'a, C> {
+  //   self.world.borrow().write_storage::<C>()
+  // }
+  pub fn world(&self) -> Ref<World> {
+    self.world.borrow()
+  }
   pub fn each<T: Component, F: FnMut(&T)>(&self, mut f: F) {
-    let world = self.world.read().unwrap();
-    for s in world.write_storage::<T>().join() {
+    let world = self.world.borrow();
+    let storage = world.read_storage::<T>();
+    for s in (&storage).join() {
       f(s);
     }
   }
@@ -345,75 +318,8 @@ impl Drop for Scene {
   fn drop(&mut self) {
     self
       .world
-      .write()
-      .unwrap()
+      .borrow_mut()
       .delete_entity(self.root.entity)
       .expect("Unable to delete entity");
   }
 }
-
-// trait IObserver {
-//   fn update<C: Component>(&mut self, node: &Node, component: &C);
-// }
-
-// trait ISubject<'a, T: IObserver> {
-//   fn attach(&mut self, observer: &'a mut T);
-//   fn detach(&mut self, observer: &'a T);
-//   fn notify_observers(&mut self);
-// }
-
-// struct Subject<'a, T: IObserver> {
-//   observers: Vec<&'a mut T>,
-// }
-// impl<'a, T: IObserver + PartialEq> Subject<'a, T> {
-//   fn new() -> Subject<'a, T> {
-//     Subject {
-//       observers: Vec::new(),
-//     }
-//   }
-// }
-
-// impl<'a, T: IObserver + PartialEq> ISubject<'a, T> for Subject<'a, T> {
-//   fn attach(&mut self, observer: &'a mut T) {
-//     self.observers.push(observer);
-//   }
-//   fn detach(&mut self, observer: &'a T) {
-//     if let Some(idx) = self.observers.iter().position(|x| *x == observer) {
-//       self.observers.remove(idx);
-//     }
-//   }
-//   fn notify_observers(&mut self) {
-//     for item in self.observers.iter_mut() {
-//       let node = Node::new();
-//       let test = Test {};
-//       item.update(&node, &test);
-//     }
-//   }
-// }
-
-// #[derive(Component)]
-// struct Test;
-
-// #[derive(PartialEq)]
-// struct ConcreteObserver {
-//   id: i32,
-// }
-// impl IObserver for ConcreteObserver {
-//   fn update<C: Component>(&mut self, node: &Node, component: &C) {
-//     println!("Observer id:{} received event!", self.id);
-//   }
-// }
-
-// #[test]
-// fn test_observer() {
-//   let mut subject = Subject::new();
-//   let mut observer_a = ConcreteObserver { id: 1 };
-//   let mut observer_b = ConcreteObserver { id: 2 };
-
-//   subject.attach(&mut observer_a);
-//   subject.attach(&mut observer_b);
-//   subject.notify_observers();
-
-//   subject.detach(&observer_b);
-//   subject.notify_observers();
-// }
