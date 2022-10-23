@@ -42,8 +42,8 @@ impl Camera for PinholeCamera {
       ndc.y as f32 * far_plane_hy,
       -self.far,
     ).normalize();
-    let origin = self.world_to_view.translation;
-    let direction = self.world_to_view.transform_vector3a(direction);
+    let origin = self.view_to_world.translation;
+    let direction = self.view_to_world.transform_vector3a(direction);
     Ray::new(origin, direction)
   }
 }

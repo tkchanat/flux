@@ -5,6 +5,10 @@ mod mesh;
 mod procedural;
 mod renderer;
 mod texture;
+mod material;
+mod pipeline;
+mod bind_group;
+pub mod backend;
 
 pub use buffer::*;
 pub use components::*;
@@ -13,3 +17,6 @@ pub use mesh::*;
 pub use procedural::*;
 pub use renderer::*;
 pub use texture::*;
+pub use pipeline::*;
+pub use bind_group::*;
+pub use material::*;

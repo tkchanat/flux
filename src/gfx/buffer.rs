@@ -1,52 +1,56 @@
-use super::RenderDevice;
+use wgpu::util::DeviceExt;
+
+use super::RenderDeviceOld;
+
+#[derive(Clone, Debug)]
+pub struct Buffer {
+  pub(super) handle: usize,
+}
 
 pub struct VertexBuffer {
-  pub(crate) buffer: wgpu::Buffer,
+  pub(super) buffer: Buffer,
 }
 
 impl VertexBuffer {
-  pub fn new(device: &RenderDevice, data: &[u8]) -> Self {
-    Self {
-      buffer: device.create_buffer(None, data, wgpu::BufferUsages::VERTEX),
-    }
+  pub fn new(device: &mut RenderDeviceOld, data: &[u8]) -> Self {
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+      label: None,
+      contents: data,
+      usage: wgpu::BufferUsages::VERTEX,
+    });
+    Self { buffer }
   }
 }
 
 pub struct IndexBuffer {
-  pub(crate) buffer: wgpu::Buffer,
-  index_count: u64,
+  pub(super) buffer: Buffer,
+  pub(super) format: wgpu::IndexFormat,
 }
 
 impl IndexBuffer {
-  pub fn new(device: &RenderDevice, data: &[u8]) -> Self {
-    Self {
-      buffer: device.create_buffer(None, data, wgpu::BufferUsages::INDEX),
-      index_count: data.len() as u64,
-    }
+  pub fn new(device: &mut RenderDeviceOld, data: &[u8], format: wgpu::IndexFormat) -> Self {
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+      label: None,
+      contents: data,
+      usage: wgpu::BufferUsages::INDEX,
+    });
+    Self { buffer, format }
   }
 }
 
 pub struct UniformBuffer<T> {
-  pub(crate) buffer: wgpu::Buffer,
+  pub(crate) buffer: Buffer,
   pub data: T,
 }
 
 impl<T: bytemuck::Pod + bytemuck::Zeroable> UniformBuffer<T> {
-  pub fn new(device: &RenderDevice) -> Self {
+  pub fn new(device: &mut RenderDeviceOld) -> Self {
     let data = T::zeroed();
-    Self {
-      buffer: device.create_buffer(
-        None,
-        bytemuck::cast_slice(&[data]),
-        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-      ),
-      data,
-    }
-  }
-  pub fn update(&self, device: &RenderDevice) {
-    device.update_buffer(&self.buffer, 0, bytemuck::cast_slice(&[self.data]));
-  }
-  pub fn binding(&self) -> wgpu::BindingResource {
-    self.buffer.as_entire_binding()
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+      label: None,
+      contents: bytemuck::cast_slice(&[data]),
+      usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    Self { buffer, data }
   }
 }

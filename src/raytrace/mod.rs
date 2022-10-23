@@ -21,7 +21,11 @@ use crate::{
 };
 use glam::{Vec2, Vec3};
 use std::{
-  sync::{Arc, RwLock, RwLockReadGuard, Weak},
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, Sender, TryRecvError},
+    Arc, RwLock, RwLockReadGuard, Weak,
+  },
   thread,
 };
 
@@ -42,15 +46,16 @@ impl Default for RenderSettings {
   }
 }
 
-pub struct RenderEngine {
-  pub film: Arc<RwLock<Film>>,
-  pub settings: RenderSettings,
-}
-
 pub struct RenderContext {
   settings: RenderSettings,
   accelerator: Arc<Accelerator>,
   camera: Weak<dyn Camera>,
+}
+
+pub struct RenderEngine {
+  pub film: Arc<RwLock<Film>>,
+  pub settings: RenderSettings,
+  interrupt: Arc<AtomicBool>,
 }
 
 impl RenderEngine {
@@ -59,15 +64,18 @@ impl RenderEngine {
       settings.resolution.0,
       settings.resolution.1,
     )));
-    Self { film, settings }
+    Self {
+      film,
+      settings,
+      interrupt: Arc::new(AtomicBool::new(false)),
+    }
   }
   pub fn prepare_render(&mut self, scene: &SceneEngine) -> RenderContext {
     let timer = Timer::new();
-
     let accelerator = Arc::new(Accelerator::build(&scene));
     println!("BVH building took: {:?}", timer.elapsed());
-
-    let camera = Arc::downgrade(&scene.cameras[scene.active_cam]);
+    let camera = Arc::downgrade(&scene.cameras[scene.active_cam as usize]);
+    self.interrupt.store(false, Ordering::SeqCst);
 
     RenderContext {
       settings: self.settings.clone(),
@@ -75,11 +83,12 @@ impl RenderEngine {
       camera,
     }
   }
-  pub fn render_frame(&self, context: RenderContext) {
+  pub fn render_frame(&mut self, context: RenderContext) {
     let width = context.settings.resolution.0;
     let height = context.settings.resolution.1;
     let film_handle = self.film.clone();
     let camera = context.camera.upgrade().expect("Camera no longer exists");
+    let interrupt = self.interrupt.clone();
 
     thread::spawn(move || {
       let timer = Timer::new();
@@ -107,10 +116,19 @@ impl RenderEngine {
               };
               film.write_pixel(x, y, acc_pixel.into());
             }
+
+            if interrupt.load(Ordering::SeqCst) {
+              println!("Render Interrupted");
+              return;
+            }
           }
         }
       }
       println!("Full render took: {:?}", timer.elapsed());
     });
+  }
+
+  pub fn interrupt_render(&self) {
+    self.interrupt.store(true, Ordering::SeqCst);
   }
 }

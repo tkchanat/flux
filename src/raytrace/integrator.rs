@@ -6,7 +6,7 @@ use super::{
   hit::Hit,
   sampler::Sampler,
 };
-use crate::math::{Color, Ray};
+use crate::math::{transform_ray, Color, Ray};
 
 pub trait Integrator {
   fn li(&self, accel: &Accelerator, sampler: &mut dyn Sampler, ray: Ray, bounce: u32) -> Color;
@@ -42,8 +42,7 @@ impl Integrator for PathIntegrator {
     }
 
     let wo = -ray.direction;
-    let mut wi = Vec3A::default();
-    let mut pdf = 0.0;
+    let (mut wi, mut pdf) = (Vec3A::default(), 0.0);
     let bsdf = Lambertian::default();
     let f = bsdf.sample(&hit, &wo, &mut wi, &mut pdf, &sampler.get_2d());
     if f == Color::BLACK || pdf == 0.0 {
@@ -52,12 +51,7 @@ impl Integrator for PathIntegrator {
 
     let le = Color::BLACK;
     let cosine = wi.dot(hit.ns).max(0.0);
-    let new_ray = Ray {
-      origin: hit.p,
-      direction: wi,
-      t_min: 0.001,
-      t_max: f32::INFINITY,
-    };
+    let new_ray = hit.spawn_ray(&wi);
     le + f * self.li(accel, sampler, new_ray, bounce + 1) * cosine
     // wi.into()
     // ((hit.ns + 1.0) * 0.5).into()

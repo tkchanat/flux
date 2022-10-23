@@ -1,9 +1,8 @@
-use crate::{gfx, prefabs};
 use super::app;
+use crate::{gfx, prefabs};
 use core::any::TypeId;
 use specs::{
-  Builder, Component, DenseVecStorage, DispatcherBuilder, Entity, Join, ReadStorage, System, World,
-  WorldExt,
+  Builder, Component, DenseVecStorage, Entity, Join, ReadStorage, System, World, WorldExt,
 };
 use specs_derive::Component;
 use std::cell::{Ref, RefCell, RefMut};
@@ -14,106 +13,21 @@ use std::{
   ops::{Deref, DerefMut},
 };
 
+fn world() -> &'static specs::World {
+  &app().scene.world
+}
+fn world_mut() -> &'static mut specs::World {
+  &mut app().scene.world
+}
+
 #[derive(Component, Default)]
 struct Relationship {
   parent: Option<Entity>,
   children: Vec<Entity>,
 }
 
-pub struct Read<C: Component>(*const C);
-impl<C: Component> Deref for Read<C> {
-  type Target = C;
-  fn deref(&self) -> &Self::Target {
-    unsafe { self.0.as_ref().unwrap() }
-  }
-}
-impl<C: Component> Composable for Read<C> {
-  fn get(world: &RefMut<World>, entity: Entity) -> Self {
-    let ptr = match world.read_component::<C>().get(entity) {
-      Some(component) => component as *const C,
-      None => std::ptr::null(),
-    };
-    Read(ptr)
-  }
-  fn valid(&self) -> bool {
-    !self.0.is_null()
-  }
-}
-pub struct Write<C: Component>(*mut C);
-impl<C: Component> Deref for Write<C> {
-  type Target = C;
-  fn deref(&self) -> &Self::Target {
-    unsafe { self.0.as_ref().unwrap() }
-  }
-}
-impl<C: Component> DerefMut for Write<C> {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { self.0.as_mut().unwrap() }
-  }
-}
-impl<C: Component> Composable for Write<C> {
-  fn get(world: &RefMut<World>, entity: Entity) -> Self {
-    let ptr = match world.write_component::<C>().get_mut(entity) {
-      Some(component) => component as *mut C,
-      None => std::ptr::null_mut(),
-    };
-    Write(ptr)
-  }
-  fn valid(&self) -> bool {
-    !self.0.is_null()
-  }
-}
-
-pub trait ComponentsTuple {
-  fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self>
-  where
-    Self: Sized;
-}
-impl<A: Composable> ComponentsTuple for A {
-  fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self> {
-    let a = A::get(world, entity);
-    if A::valid(&a) {
-      Some(a)
-    } else {
-      None
-    }
-  }
-}
-macro_rules! impl_compose {
-  ($($a:ident)+) => {
-    impl<$($a: Composable),+> ComponentsTuple for ($($a,)+) {
-      #[allow(non_snake_case)]
-      fn compose(world: &RefMut<World>, entity: Entity) -> Option<Self> {
-        let tuple = ($($a::get(world, entity),)+);
-        let ($($a,)+) = tuple;
-        // let (a, b) = (A::get(world, entity), B::get(world, entity));
-        let all_valid = [$($a.valid(),)+].iter().all(|x| *x);
-        if all_valid {
-          Some(($($a,)+))
-        } else {
-          None
-        }
-      }
-    }
-  };
-}
-impl_compose! { A }
-impl_compose! { A B }
-impl_compose! { A B C }
-impl_compose! { A B C D }
-impl_compose! { A B C D E }
-impl_compose! { A B C D E F }
-impl_compose! { A B C D E F G }
-impl_compose! { A B C D E F G H }
-
-trait Composable {
-  fn get(world: &RefMut<World>, entity: Entity) -> Self;
-  fn valid(&self) -> bool;
-}
-
 pub struct Node {
-  entity: Entity,
-  world: Weak<RefCell<specs::World>>,
+  pub entity: Entity,
 }
 impl Node {
   pub fn new() -> Self {
@@ -123,10 +37,12 @@ impl Node {
     app().scene.destroy_node(self);
   }
   pub fn set_parent(&self, parent: &Node) {
-    if let Some(mut rel) = self.get_component::<Write<Relationship>>() {
+    self.get_component_mut(|rel: &mut Relationship| {
       // Remove relationship from the old parent
       if let Some(old_parent) = rel.parent {
-        if let Some(mut old_parent_rel) = self.get_component_impl::<Write<Relationship>>(old_parent)
+        if let Some(mut old_parent_rel) = world()
+          .write_component::<Relationship>()
+          .get_mut(old_parent)
         {
           let idx = old_parent_rel
             .children
@@ -137,47 +53,40 @@ impl Node {
         }
       }
       // Establish new relationship with the new parent
-      if let Some(mut new_parent_rel) =
-        self.get_component_impl::<Write<Relationship>>(parent.entity)
+      if let Some(mut new_parent_rel) = world()
+        .write_component::<Relationship>()
+        .get_mut(parent.entity)
       {
         new_parent_rel.children.push(self.entity);
       }
       rel.parent = Some(parent.entity);
-    }
+    });
   }
   pub fn get_parent(&self) -> Option<Node> {
-    if let Some(rel) = self.get_component::<Read<Relationship>>() {
-      if let Some(parent) = rel.parent {
-        return Some(Node {
-          entity: parent,
-          world: self.world.clone(),
-        });
+    let mut parent = None;
+    self.get_component(|rel: &Relationship| {
+      if let Some(entity) = rel.parent {
+        parent = Some(Node { entity });
       }
-    }
-    None
+    });
+    parent
   }
   pub fn children(&self) -> Vec<Node> {
-    if let Some(rel) = self.get_component::<Read<Relationship>>() {
-      return rel
-        .children
-        .iter()
-        .map(|x| Node {
-          entity: *x,
-          world: self.world.clone(),
-        })
-        .collect();
-    }
-    Vec::new()
+    let mut children = Vec::new();
+    self.get_component(|rel: &Relationship| {
+      children = rel.children.iter().map(|x| Node { entity: *x }).collect();
+    });
+    children
   }
   pub fn add_child(&self) -> Node {
     let child = app().scene.create_node(Some(self.entity));
-    if let Some(mut rel) = self.get_component::<Write<Relationship>>() {
+    self.get_component_mut(|rel: &mut Relationship| {
       rel.parent = Some(self.entity);
       rel.children.push(child.entity);
-    }
+    });
     child
   }
-  pub fn add_component<C: Component>(&self, component: C) {
+  pub fn add_component<C: Component>(&self, component: C) -> &Node {
     let type_id = TypeId::of::<C>();
     let observers = app().scene.observers.borrow();
     if let Some(observers) = observers.get(&type_id) {
@@ -186,33 +95,27 @@ impl Node {
         cb(&self, &component);
       }
     }
-    self
-      .world
-      .upgrade()
-      .expect("World no longer exists")
-      .borrow_mut()
+    world()
       .write_component::<C>()
       .insert(self.entity, component)
       .expect("Unable to add component to entity");
+    self
   }
   pub fn remove_component<C: Component>(&self) -> Option<C> {
-    self
-      .world
-      .upgrade()
-      .expect("World no longer exists")
-      .borrow_mut()
-      .write_component::<C>()
-      .remove(self.entity)
+    world().write_component::<C>().remove(self.entity)
   }
-  pub fn get_component<T: ComponentsTuple>(&self) -> Option<T> {
-    self.get_component_impl(self.entity)
+  pub fn get_component<C: Component, F: FnMut(&C)>(&self, mut f: F) {
+    let storage = world().read_component::<C>();
+    if let Some(component) = storage.get(self.entity) {
+      f(component);
+    }
   }
-  fn get_component_impl<T: ComponentsTuple>(&self, entity: Entity) -> Option<T> {
-    let world = self.world.upgrade().expect("World no longer exists");
-    let x = T::compose(&world.borrow_mut(), entity);
-    x
+  pub fn get_component_mut<C: Component, F: FnMut(&mut C)>(&self, mut f: F) {
+    let mut storage = world().write_component::<C>();
+    if let Some(component) = storage.get_mut(self.entity) {
+      f(component);
+    }
   }
-
 }
 trait AsAny {
   fn as_any(&self) -> &dyn std::any::Any;
@@ -226,7 +129,7 @@ impl<C: Component> AsAny for Observer<C> {
   }
 }
 pub struct Scene {
-  world: Rc<RefCell<specs::World>>,
+  pub(super) world: specs::World,
   pending_kill: VecDeque<Entity>,
   observers: RefCell<HashMap<TypeId, Vec<Box<dyn AsAny>>>>,
   pub root: Node,
@@ -250,38 +153,34 @@ impl Scene {
     world.register::<prefabs::Camera>();
     world.register::<gfx::Transform>();
     world.register::<gfx::Mesh>();
+    world.register::<gfx::MaterialOverlay>();
 
-    let handle = Rc::new(RefCell::new(world));
     let root = Node {
-      entity: handle
-        .borrow_mut()
+      entity: world
         .create_entity()
         .with::<Relationship>(Relationship::default())
         .build(),
-      world: Rc::downgrade(&handle),
     };
     Self {
-      world: handle,
+      world,
       root,
       observers: RefCell::new(HashMap::new()),
       pending_kill: VecDeque::new(),
     }
   }
-  fn create_node(&self, parent: Option<Entity>) -> Node {
+  fn create_node(&mut self, parent: Option<Entity>) -> Node {
     if parent.is_none() {
       return self.root.add_child();
     }
     Node {
       entity: self
         .world
-        .borrow_mut()
         .create_entity()
         .with::<Relationship>(Relationship {
           parent,
           children: Vec::new(),
         })
         .build(),
-      world: Rc::downgrade(&self.world),
     }
   }
   fn destroy_node(&mut self, node: Node) {
@@ -292,23 +191,12 @@ impl Scene {
       let entity = self.pending_kill.pop_back().unwrap();
       self
         .world
-        .borrow_mut()
         .delete_entity(entity)
         .expect("Unable to delete entity");
     }
   }
-  // pub fn storage<'a, C: Component>(&'a self) -> specs::ReadStorage<'a, C> {
-  //   self.world.borrow().read_storage::<C>()
-  // }
-  // pub fn storage_mut<'a, C: Component>(&'a self) -> specs::WriteStorage<'a, C> {
-  //   self.world.borrow().write_storage::<C>()
-  // }
-  pub fn world(&self) -> Ref<World> {
-    self.world.borrow()
-  }
   pub fn each<T: Component, F: FnMut(&T)>(&self, mut f: F) {
-    let world = self.world.borrow();
-    let storage = world.read_storage::<T>();
+    let storage = self.world.read_storage::<T>();
     for s in (&storage).join() {
       f(s);
     }
@@ -318,7 +206,6 @@ impl Drop for Scene {
   fn drop(&mut self) {
     self
       .world
-      .borrow_mut()
       .delete_entity(self.root.entity)
       .expect("Unable to delete entity");
   }

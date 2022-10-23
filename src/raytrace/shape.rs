@@ -84,8 +84,8 @@ pub struct TriangleMesh {
   pub texcoords: Option<Vec<glam::Vec2>>,
   pub indices: Vec<u32>,
   pub tri_count: u32,
-  object_to_world: glam::Affine3A,
-  world_to_object: glam::Affine3A,
+  pub object_to_world: glam::Affine3A,
+  pub world_to_object: glam::Affine3A,
 }
 impl TriangleMesh {
   pub fn new(

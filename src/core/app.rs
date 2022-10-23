@@ -11,6 +11,9 @@ use winit::{
 };
 
 pub trait AppState {
+  fn init() -> Self
+  where
+    Self: Sized;
   fn start(&mut self, app: AppData) {}
   fn update(&mut self, app: AppData) {}
   fn resize(&mut self, new_size: &PhysicalSize<u32>) {}
@@ -28,12 +31,12 @@ impl<'a> AppData<'a> {
   pub fn window_height(&self) -> u32 {
     self.window.inner_size().height
   }
-  pub fn world(&self) -> Ref<specs::World> {
-    self.scene.world()
+  pub fn world(&self) -> &specs::World {
+    &self.scene.world
   }
 }
 
-static mut APP_INSTANCE: Option<Application> = None;
+pub(crate) static mut APP_INSTANCE: Option<Application> = None;
 
 pub(super) fn app() -> &'static mut Application {
   unsafe {
@@ -44,7 +47,14 @@ pub(super) fn app() -> &'static mut Application {
 }
 
 struct EmptyState;
-impl AppState for EmptyState {}
+impl AppState for EmptyState {
+  fn init() -> Self
+  where
+    Self: Sized,
+  {
+    Self {}
+  }
+}
 pub enum Transition {
   None,
   Pop,
@@ -57,7 +67,7 @@ struct DisplaySystem {
   window: winit::window::Window,
 }
 struct RenderingSystem {
-  device: gfx::RenderDevice,
+  device: gfx::RenderDeviceOld,
   renderer: Box<dyn gfx::Renderer>,
 }
 
@@ -65,7 +75,6 @@ struct RenderingSystem {
 pub struct AppBuilder {
   display_system: Option<DisplaySystem>,
   rendering_system: Option<RenderingSystem>,
-  initial_state: Option<Box<dyn AppState>>,
 }
 impl AppBuilder {
   pub fn new() -> Self {
@@ -86,35 +95,30 @@ impl AppBuilder {
       .as_ref()
       .expect("Rendering system depends on display system")
       .window;
-    let device = gfx::RenderDevice::new(&window);
-    let renderer = Box::new(gfx::SimpleRenderer::new(&device));
+    let mut device = gfx::RenderDeviceOld::new(&window);
+    let renderer = Box::new(gfx::SimpleRenderer::new(&mut device));
     self.rendering_system = Some(RenderingSystem { device, renderer });
-    self
-  }
-  pub fn set_initial_state(mut self, state: Box<dyn AppState>) -> AppBuilder {
-    self.initial_state = Some(state);
     self
   }
   pub fn build(self) -> Application {
     let display = self.display_system.unwrap();
     let rendering = self.rendering_system.unwrap();
-    let states = VecDeque::from_iter(self.initial_state.into_iter());
     Application {
       scene: Scene::new(),
       window: display.window,
       render_device: rendering.device,
       renderer: rendering.renderer,
       input_system: InputSystem::new(),
-      states,
+      states: VecDeque::new(),
       quit_requested: false,
     }
   }
 }
 
 pub struct Application {
-  pub(super) scene: Scene,
+  pub(crate) render_device: gfx::RenderDeviceOld,
+  pub(crate) scene: Scene,
   window: winit::window::Window,
-  render_device: gfx::RenderDevice,
   renderer: Box<dyn gfx::Renderer>,
   input_system: InputSystem,
   states: VecDeque<Box<dyn AppState>>,
@@ -123,14 +127,14 @@ pub struct Application {
 
 impl Application {
   fn init(&'static mut self) {
-    self.scene.observe::<crate::prefabs::Mesh, _>(|node, mesh| {
-      node.add_component(gfx::Mesh::from_mesh(&self.render_device, mesh));
-      println!("gfx::Mesh added!");
-    });
-    self.scene.observe::<crate::prefabs::GeomSphere, _>(|node, sphere| {
-      node.add_component(gfx::Mesh::from_geomsphere(&self.render_device, sphere));
-      println!("sphere added!");
-    });
+    // self.scene.observe::<crate::prefabs::Mesh, _>(|node, mesh| {
+    //   node.add_component(gfx::Mesh::from_mesh(&mut self.render_device, mesh));
+    //   println!("gfx::Mesh added!");
+    // });
+    // self.scene.observe::<crate::prefabs::GeomSphere, _>(|node, sphere| {
+    //   node.add_component(gfx::Mesh::from_geomsphere(&self.render_device, sphere));
+    //   println!("sphere added!");
+    // });
   }
   fn transition(&mut self, trans: Transition) {
     match trans {
@@ -199,13 +203,14 @@ impl Application {
 
     self.input_system.reset_state();
   }
-  pub fn run(self, event_loop: winit::event_loop::EventLoop<()>) {
+  pub fn run<A: AppState + 'static>(self, event_loop: winit::event_loop::EventLoop<()>) {
     unsafe {
       APP_INSTANCE = Some(self);
     }
     app().init();
+    app().states.push_back(Box::new(A::init()));
     app().state().start(app().app_data());
-  
+
     event_loop.run(move |event, _, control_flow| match event {
       // Event::RedrawRequested(window_id) if window_id == self.window.id() => {}
       Event::MainEventsCleared => {

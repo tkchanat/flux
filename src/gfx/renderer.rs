@@ -1,13 +1,20 @@
 use specs::{Join, WorldExt};
 
-use super::{Mesh, RenderDevice, Transform, UniformBuffer, VertexBuffer};
+use super::{
+  BindGroup, BindGroupEntry, MaterialOverlay, Mesh, RenderDeviceOld, GraphicsPipeline, Transform,
+  UniformBuffer, VertexBuffer,
+};
 use crate::{core::AppData, prefabs::Camera};
 
 pub trait Renderer {
-  fn new(device: &RenderDevice) -> Self
+  fn new(render_device: &mut RenderDeviceOld) -> Self
   where
     Self: Sized;
-  fn render(&mut self, app: AppData, device: &RenderDevice) -> Result<(), wgpu::SurfaceError>;
+  fn render(
+    &mut self,
+    app: AppData,
+    render_device: &RenderDeviceOld,
+  ) -> Result<(), wgpu::SurfaceError>;
 }
 
 #[repr(C)]
@@ -46,109 +53,73 @@ struct CameraUniform {
 }
 
 pub struct SimpleRenderer {
-  pipeline_diffuse: wgpu::RenderPipeline,
+  pipeline_opaque: GraphicsPipeline,
+  pipeline_overlay: GraphicsPipeline,
   camera_buffer: UniformBuffer<CameraUniform>,
-  camera_bind_group: wgpu::BindGroup,
+  camera_bind_group: BindGroup,
   depth_stencil: wgpu::Texture,
 }
 impl Renderer for SimpleRenderer {
-  fn new(device: &RenderDevice) -> Self {
-    let camera_buffer = UniformBuffer::new(device);
-    let camera_bind_group_layout = device.create_bind_group_layout(
-      Some("camera_bind_group_layout"),
-      &[wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::VERTEX,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Uniform,
-          has_dynamic_offset: false,
-          min_binding_size: None,
-        },
-        count: None,
-      }],
-    );
-    let camera_bind_group = device.create_bind_group(
-      Some("camera_bind_group"),
+  fn new(render_device: &mut RenderDeviceOld) -> Self {
+    let camera_buffer = UniformBuffer::new(render_device);
+    let camera_bind_group_layout =
+      render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[wgpu::BindGroupLayoutEntry {
+          binding: 0,
+          visibility: wgpu::ShaderStages::VERTEX,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
+        }],
+      });
+    let camera_bind_group = render_device.create_bind_group(
       &camera_bind_group_layout,
-      &[wgpu::BindGroupEntry {
-        binding: 0,
-        resource: camera_buffer.binding(),
-      }],
+      &[BindGroupEntry::Buffer(0, &camera_buffer.buffer)],
     );
 
-    let depth_stencil = device.create_texture(
-      Some("Depth"),
-      wgpu::Extent3d {
-        width: 400,  // TODO
-        height: 400, // TODO
-        depth_or_array_layers: 1,
-      },
-      1,
-      1,
-      wgpu::TextureDimension::D2,
-      wgpu::TextureFormat::Depth24PlusStencil8,
-      wgpu::TextureUsages::RENDER_ATTACHMENT,
-    );
-
-    let diffuse_render_pipeline_layout = device.create_pipeline_layout(
-      Some("Diffuse Render Pipeline Layout"),
-      &[&camera_bind_group_layout],
-      &[wgpu::PushConstantRange {
-        stages: wgpu::ShaderStages::VERTEX,
-        range: 0..64,
-      }],
-    );
-    let shader_diffuse =
-      device.create_shader_module(Some("Shader"), include_str!("shaders/diffuse.wgsl"));
-    let pipeline_diffuse = device.create_pipeline(
-      Some("Render Pipeline Diffuse"),
-      Some(&diffuse_render_pipeline_layout),
-      wgpu::VertexState {
-        module: &shader_diffuse,
-        entry_point: "vs_main",
-        buffers: &[Vertex::desc()],
-      },
-      Some(wgpu::FragmentState {
-        module: &shader_diffuse,
-        entry_point: "fs_main",
-        targets: &[Some(wgpu::ColorTargetState {
-          format: device.surface_format(),
-          blend: Some(wgpu::BlendState::REPLACE),
-          write_mask: wgpu::ColorWrites::ALL,
-        })],
-      }),
-      wgpu::PrimitiveState {
-        topology: wgpu::PrimitiveTopology::TriangleList,
-        strip_index_format: None,
-        front_face: wgpu::FrontFace::Ccw,
-        cull_mode: Some(wgpu::Face::Back),
-        polygon_mode: wgpu::PolygonMode::Fill,
-        unclipped_depth: false,
-        conservative: false,
-      },
-      Some(wgpu::DepthStencilState {
+    let depth_stencil = render_device
+      .device
+      .create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+          width: 400,  // TODO
+          height: 400, // TODO
+          depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth24PlusStencil8,
-        depth_write_enabled: true,
-        depth_compare: wgpu::CompareFunction::Less,
-        stencil: wgpu::StencilState::default(),
-        bias: wgpu::DepthBiasState::default(),
-      }),
-      wgpu::MultisampleState {
-        count: 1,
-        mask: !0,
-        alpha_to_coverage_enabled: false,
-      },
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+      });
+
+    let pipeline_opaque = render_device.create_render_pipeline(
+      "src/gfx/shaders/opaque.vert.spv",
+      Some("src/gfx/shaders/opaque.frag.spv"),
+    );
+    let pipeline_overlay = render_device.create_render_pipeline(
+      "src/gfx/shaders/overlay.vert.spv",
+      Some("src/gfx/shaders/overlay.frag.spv"),
     );
 
     Self {
-      pipeline_diffuse,
+      pipeline_opaque,
+      pipeline_overlay,
       camera_buffer,
       camera_bind_group,
       depth_stencil,
     }
   }
-  fn render(&mut self, app: AppData, device: &RenderDevice) -> Result<(), wgpu::SurfaceError> {
-    let output = device.surface_texture()?;
+  fn render(
+    &mut self,
+    app: AppData,
+    render_device: &RenderDeviceOld,
+  ) -> Result<(), wgpu::SurfaceError> {
+    let output = render_device.surface.get_current_texture()?;
     let view = output
       .texture
       .create_view(&wgpu::TextureViewDescriptor::default());
@@ -160,16 +131,26 @@ impl Renderer for SimpleRenderer {
     let world = app.world();
     let transform_storage = world.read_storage::<Transform>();
     let camera_storage = world.read_storage::<Camera>();
+    let mesh_storage = world.read_storage::<Mesh>();
+
     for (transform, camera) in (&transform_storage, &camera_storage).join().take(1) {
       self.camera_buffer.data.view = transform.to_matrix().to_cols_array_2d();
       self.camera_buffer.data.projection = camera.projection().to_cols_array_2d();
-      self.camera_buffer.update(device);
+      render_device.update_buffer(
+        &self.camera_buffer.buffer,
+        bytemuck::cast_slice(&[self.camera_buffer.data]),
+      );
     }
 
-    device.encode_commands(&|encoder: &mut wgpu::CommandEncoder| {
-      let mesh_storage = world.read_storage::<Mesh>();
-
-      let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+    let mut encoder =
+      render_device
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+          label: Some("Render Encoder"),
+        });
+    render_device.begin_render_pass(
+      &mut encoder,
+      &wgpu::RenderPassDescriptor {
         label: Some("Render Pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
           view: &view,
@@ -192,23 +173,53 @@ impl Renderer for SimpleRenderer {
           }),
           stencil_ops: None,
         }),
-      });
-
-      render_pass.set_pipeline(&self.pipeline_diffuse);
-      render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-      for (transform, mesh) in (&transform_storage, &mesh_storage).join() {
-        render_pass.set_vertex_buffer(0, mesh.vertex_buffer.buffer.slice(..));
-        render_pass.set_push_constants(
-          wgpu::ShaderStages::VERTEX,
-          0,
-          bytemuck::cast_slice(&[transform.to_matrix().to_cols_array()]),
-        );
-        if let Some(index_buffer) = &mesh.index_buffer {
-          render_pass.set_index_buffer(index_buffer.buffer.slice(..), wgpu::IndexFormat::Uint16);
-          render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+      },
+      |render_pass| {
+        // Opaque Pass
+        render_pass.set_pipeline(&self.pipeline_opaque);
+        render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        for (transform, mesh) in (&transform_storage, &mesh_storage).join() {
+          if !mesh.renderable {
+            continue;
+          }
+          let mesh_data = mesh.gpu_data.as_ref().unwrap();
+          render_pass.set_vertex_buffer(0, &mesh_data.vertex_buffer);
+          render_pass.set_push_constants(
+            wgpu::ShaderStages::VERTEX,
+            0,
+            bytemuck::cast_slice(&[transform.to_matrix().to_cols_array()]),
+          );
+          match &mesh_data.index_buffer {
+            Some(index_buffer) => {
+              render_pass.set_index_buffer(index_buffer);
+              render_pass.draw_indexed(0..mesh_data.count, 0, 0..1);
+            }
+            None => {
+              render_pass.draw(0..mesh_data.count, 0..1);
+            }
+          }
         }
-      }
-    });
+
+        // Overlay Pass
+        let material_storage = world.read_storage::<MaterialOverlay>();
+        render_pass.set_pipeline(&self.pipeline_overlay);
+        for (mesh, material) in (&mesh_storage, &material_storage).join() {
+          if !mesh.renderable {
+            continue;
+          }
+          let mesh_data = mesh.gpu_data.as_ref().unwrap();
+          render_pass.set_bind_group(0, &material.bind_group, &[]);
+          render_pass.set_vertex_buffer(0, &mesh_data.vertex_buffer);
+          render_pass.set_index_buffer(mesh_data.index_buffer.as_ref().unwrap());
+          render_pass.draw_indexed(0..mesh_data.count, 0, 0..1);
+        }
+      },
+    );
+
+    render_device
+      .queue
+      .submit(std::iter::once(encoder.finish()));
+
     output.present();
 
     Ok(())
