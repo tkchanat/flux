@@ -25,8 +25,15 @@ impl Backend for Vulkan {
     use vulkano::VulkanLibrary;
     let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
     println!("Using Vulkan {:?}", library.api_version());
-    let instance =
-      Instance::new(library, InstanceCreateInfo::default()).expect("failed to create instance");
+
+    #[cfg(windows)]
+    let instance_create_into = InstanceCreateInfo::default();
+    #[cfg(target_os = "macos")]
+    let instance_create_info = InstanceCreateInfo {
+      enumerate_portability: true,
+      ..Default::default()
+    };
+    let instance = Instance::new(library, instance_create_info).expect("failed to create instance");
     // Enumerating physical devices
     let physical = instance
       .enumerate_physical_devices()
@@ -136,7 +143,7 @@ impl Backend for Vulkan {
     extent: (u32, u32, u32),
     format: Format,
   ) -> Self::Texture {
-    use vulkano::image::{view::ImageView, ImageDimensions, StorageImage};
+    use vulkano::image::{view::ImageView, ImageDimensions, ImageLayout, StorageImage};
 
     let image = StorageImage::new(
       device.device.clone(),
@@ -151,30 +158,111 @@ impl Backend for Vulkan {
     .unwrap();
     let access = image.clone();
     let view = ImageView::new_default(image.clone()).unwrap();
+    let layout = ImageLayout::General;
 
     VulkanTexture {
       handle: image,
       access,
       view,
+      format: format.into(),
+      layout,
     }
   }
 
-  fn create_render_pass(device: &Self::Device) -> Self::RenderPass {
-    let render_pass = vulkano::single_pass_renderpass!(device.device.clone(),
-        attachments: {
-            color: {
-                load: Clear,
-                store: Store,
-                format: Format::R8G8B8A8_UNORM.into(),
-                samples: 1,
-            }
-        },
-        pass: {
-            color: [color],
-            depth_stencil: {}
-        }
-    )
-    .unwrap();
+  fn create_render_pass(
+    device: &Self::Device,
+    color_attachments: &[&Self::Texture],
+    depth_attachment: Option<&Self::Texture>,
+  ) -> Self::RenderPass {
+    use vulkano::image::{ImageAspects, ImageLayout, SampleCount};
+    use vulkano::render_pass::{
+      AttachmentDescription, AttachmentReference, LoadOp, RenderPass, RenderPassCreateInfo,
+      StoreOp, SubpassDescription,
+    };
+
+    // let attachments = color_attachments.iter().chain(depth_attachment.iter());
+    let color_attachment_descriptions = color_attachments
+      .iter()
+      .map(|color| AttachmentDescription {
+        format: Some(color.format),
+        samples: SampleCount::Sample1,
+        load_op: LoadOp::Clear,
+        store_op: StoreOp::Store,
+        stencil_load_op: LoadOp::DontCare,
+        stencil_store_op: StoreOp::DontCare,
+        initial_layout: color.layout,
+        final_layout: ImageLayout::ColorAttachmentOptimal,
+        ..Default::default()
+      })
+      .collect::<Vec<_>>();
+    let depth_attachment_descriptions = depth_attachment.and_then(|depth| {
+      Some(AttachmentDescription {
+        format: Some(depth.format),
+        samples: SampleCount::Sample1,
+        load_op: LoadOp::Clear,
+        store_op: StoreOp::Store,
+        stencil_load_op: LoadOp::DontCare,
+        stencil_store_op: StoreOp::DontCare,
+        initial_layout: depth.layout,
+        final_layout: ImageLayout::DepthStencilAttachmentOptimal,
+        ..Default::default()
+      })
+    });
+    let attachments = color_attachment_descriptions
+      .into_iter()
+      .chain(depth_attachment_descriptions.into_iter())
+      .collect::<Vec<_>>();
+
+    let subpasses = Vec::from_iter([SubpassDescription {
+      view_mask: 0,
+      input_attachments: Vec::new(),
+      color_attachments: color_attachments
+        .iter()
+        .enumerate()
+        .map(|(i, color)| {
+          Some(AttachmentReference {
+            attachment: i as u32,
+            layout: ImageLayout::ColorAttachmentOptimal,
+            ..Default::default()
+          })
+        })
+        .collect::<Vec<_>>(),
+      resolve_attachments: Vec::new(),
+      depth_stencil_attachment: depth_attachment.and_then(|depth| {
+        Some(AttachmentReference {
+          attachment: (attachments.len() - 1) as u32,
+          layout: ImageLayout::DepthStencilAttachmentOptimal,
+          ..Default::default()
+        })
+      }),
+      preserve_attachments: Vec::new(),
+      ..Default::default()
+    }]);
+
+    let create_info = RenderPassCreateInfo {
+      attachments,
+      subpasses,
+      dependencies: Vec::new(),
+      correlated_view_masks: Vec::new(),
+      ..Default::default()
+    };
+    let render_pass =
+      RenderPass::new(device.device.clone(), create_info).expect("Unable to build render pass");
+    // let render_pass = vulkano::single_pass_renderpass!(device.device.clone(),
+    //     attachments: {
+    //         color: {
+    //             load: Clear,
+    //             store: Store,
+    //             format: Format::R8G8B8A8_UNORM.into(),
+    //             samples: 1,
+    //         }
+    //     },
+    //     pass: {
+    //         color: [color],
+    //         depth_stencil: {}
+    //     }
+    // )
+    // .unwrap();
 
     VulkanRenderPass {
       handle: render_pass,
@@ -191,13 +279,6 @@ impl Backend for Vulkan {
     use vulkano::pipeline::GraphicsPipeline;
     use vulkano::render_pass::Subpass;
     use vulkano::shader::ShaderModule;
-
-    // More on this latter
-    let viewport = Viewport {
-      origin: [0.0, 0.0],
-      dimensions: [1024.0, 1024.0],
-      depth_range: 0.0..1.0,
-    };
 
     let (vs, vs_reflect) = unsafe {
       let bytes = include_bytes!("../shaders/test.vert.spv");
@@ -220,6 +301,13 @@ impl Backend for Vulkan {
       position: [f32; 2],
     }
     vulkano::impl_vertex!(Vertex, position);
+
+    // More on this latter
+    let viewport = Viewport {
+      origin: [0.0, 0.0],
+      dimensions: [1024.0, 1024.0],
+      depth_range: 0.0..1.0,
+    };
 
     let input_state = BuffersDefinition::new().vertex::<Vertex>();
 
@@ -333,7 +421,10 @@ impl Backend for Vulkan {
       .builder
       .begin_render_pass(
         RenderPassBeginInfo {
-          clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
+          clear_values: color_attachments
+            .iter()
+            .map(|color| Some([0.0, 0.0, 0.0, 1.0].into()))
+            .collect::<Vec<_>>(),
           ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
         },
         SubpassContents::Inline,
@@ -372,6 +463,18 @@ impl Backend for Vulkan {
       .draw(vertex_count, instance_count, first_vertex, first_instance)
       .unwrap();
   }
+
+  fn submit(device: &Self::Device, command_list: Self::CommandList) {
+    use vulkano::sync::{self, GpuFuture};
+
+    let command_buffer = command_list.builder.build().unwrap();
+    let future = sync::now(device.device.clone())
+      .then_execute(device.queue.clone(), command_buffer)
+      .unwrap()
+      .then_signal_fence_and_flush()
+      .unwrap();
+    future.wait(None).unwrap();
+  }
 }
 
 pub struct VulkanDevice {
@@ -401,6 +504,8 @@ pub struct VulkanTexture {
   handle: Arc<vulkano::image::StorageImage>,
   access: Arc<dyn vulkano::image::ImageAccess>,
   view: Arc<dyn vulkano::image::ImageViewAbstract>,
+  format: vulkano::format::Format,
+  layout: vulkano::image::ImageLayout,
 }
 
 pub struct VulkanRenderPass {

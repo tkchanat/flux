@@ -654,8 +654,12 @@ pub trait Backend {
     format: Format,
   ) -> Self::Texture;
 
-  // Framebuffer
-  fn create_render_pass(device: &Self::Device) -> Self::RenderPass;
+  // Render Pass
+  fn create_render_pass(
+    device: &Self::Device,
+    color_attachments: &[&Self::Texture],
+    depth_attachment: Option<&Self::Texture>,
+  ) -> Self::RenderPass;
 
   // Graphics Pipeline
   fn create_graphics_pipeline(
@@ -687,6 +691,7 @@ pub trait Backend {
     first_vertex: u32,
     first_instance: u32,
   );
+  fn submit(device: &Self::Device, command_list: Self::CommandList);
 }
 
 pub struct CommandList<'a, B: Backend> {
@@ -694,19 +699,16 @@ pub struct CommandList<'a, B: Backend> {
   command_list: B::CommandList,
 }
 impl<'a, B: Backend> CommandList<'a, B> {
-  pub fn begin_render_pass(
-    &'a mut self,
-    render_pass: &RenderPass,
-    color_attachments: &[Texture],
-    depth_attachment: Option<Texture>,
-  ) -> &mut Self {
-    let render_pass = self.device.render_passes.get(render_pass.handle).unwrap();
-    let color_attachments = color_attachments
+  pub fn begin_render_pass(mut self, render_pass: &RenderPass) -> Self {
+    let color_attachments = render_pass
+      .bound_color_attachments
       .iter()
       .map(|color| self.device.textures.get(color.handle.unwrap()).unwrap())
       .collect::<Vec<_>>();
-    let depth_attachment = depth_attachment
+    let depth_attachment = render_pass
+      .bound_depth_attachment
       .and_then(|depth| Some(self.device.textures.get(depth.handle.unwrap()).unwrap()));
+    let render_pass = self.device.render_passes.get(render_pass.handle).unwrap();
     B::begin_render_pass(
       &mut self.command_list,
       render_pass,
@@ -715,29 +717,29 @@ impl<'a, B: Backend> CommandList<'a, B> {
     );
     self
   }
-  pub fn end_render_pass(&mut self) -> &mut Self {
+  pub fn end_render_pass(mut self) -> Self {
     B::end_render_pass(&mut self.command_list);
     self
   }
-  pub fn bind_graphics_pipeline(&mut self, pipeline: &GraphicsPipeline) -> &mut Self {
+  pub fn bind_graphics_pipeline(mut self, pipeline: &GraphicsPipeline) -> Self {
     if let Some(pipeline) = self.device.graphics_pipelines.get(pipeline.handle) {
       B::bind_graphics_pipeline(&mut self.command_list, pipeline);
     }
     self
   }
-  pub fn bind_vertex_buffer(&mut self, buffer: &Buffer) -> &mut Self {
+  pub fn bind_vertex_buffer(mut self, buffer: &Buffer) -> Self {
     if let Some(buffer) = self.device.buffers.get(buffer.handle) {
       B::bind_vertex_buffer(&mut self.command_list, buffer);
     }
     self
   }
   pub fn draw(
-    &mut self,
+    mut self,
     vertex_count: u32,
     instance_count: u32,
     first_vertex: u32,
     first_instance: u32,
-  ) -> &mut Self {
+  ) -> Self {
     B::draw(
       &mut self.command_list,
       vertex_count,
@@ -746,6 +748,9 @@ impl<'a, B: Backend> CommandList<'a, B> {
       first_instance,
     );
     self
+  }
+  pub fn submit(self) {
+    B::submit(&self.device.device, self.command_list);
   }
 }
 
@@ -800,10 +805,26 @@ impl<B: Backend> RenderDevice<B> {
     Texture { handle }
   }
 
-  pub fn create_framebuffer(&mut self) -> RenderPass {
-    let framebuffer = B::create_render_pass(&self.device);
-    let handle = self.render_passes.insert(framebuffer);
-    RenderPass { handle }
+  pub fn create_render_pass(
+    &mut self,
+    color_attachments: &[Texture],
+    depth_attachment: Option<Texture>,
+  ) -> RenderPass {
+    let render_pass = {
+      let color_attachments = color_attachments
+        .iter()
+        .map(|color| self.textures.get(color.handle.unwrap()).unwrap())
+        .collect::<Vec<_>>();
+      let depth_attachment =
+        depth_attachment.and_then(|depth| Some(self.textures.get(depth.handle.unwrap()).unwrap()));
+      B::create_render_pass(&self.device, color_attachments.as_slice(), depth_attachment)
+    };
+    let handle = self.render_passes.insert(render_pass);
+    RenderPass {
+      handle,
+      bound_color_attachments: color_attachments.to_vec(),
+      bound_depth_attachment: depth_attachment,
+    }
   }
 
   pub fn create_graphics_pipeline(&mut self, framebuffer: &RenderPass) -> GraphicsPipeline {
@@ -825,29 +846,4 @@ impl<B: Backend> RenderDevice<B> {
       B::save_texture_to_disk(&self.device, texture);
     }
   }
-}
-
-#[test]
-fn test_render_device_initialization() {
-  use super::backend::*;
-  let mut render_device = RenderDevice::<Vulkan>::new(None);
-
-  let texture = render_device.create_texture((1024, 1024, 1), Format::R8G8B8A8_UNORM);
-  let vertex_buffer = render_device.create_buffer_with_init(
-    BufferUsage::VERTEX_BUFFER,
-    [[-0.5, -0.5], [0.0, 0.5], [0.5, -0.25]],
-  );
-  let render_pass = render_device.create_framebuffer();
-  let pipeline = render_device.create_graphics_pipeline(&render_pass);
-  let mut command_list = render_device.create_command_list();
-  command_list
-    .begin_render_pass(&render_pass, &[texture], None)
-    .bind_graphics_pipeline(&pipeline)
-    .bind_vertex_buffer(&vertex_buffer)
-    .draw(3, 1, 0, 0)
-    .end_render_pass();
-
-  render_device.save_texture_to_disk(&texture);
-
-  println!("Test completed");
 }
