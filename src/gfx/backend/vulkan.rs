@@ -1,16 +1,13 @@
-use std::sync::Arc;
-
+extern crate alloc;
+use crate::gfx::{Backend, Buffer, BufferContents, BufferUsage, Format};
 use bytemuck::Pod;
+use std::sync::Arc;
 use vulkano::buffer::CpuAccessibleBuffer;
-
-use crate::{
-  core::input,
-  gfx::{Backend, Buffer, BufferContents, BufferUsage, Format},
-};
 
 pub struct Vulkan {}
 impl Backend for Vulkan {
   type Device = VulkanDevice;
+  type Swapchain = VulkanSwapchain;
   type Buffer = VulkanBuffer;
   type Texture = VulkanTexture;
   type Sampler = ();
@@ -19,63 +16,148 @@ impl Backend for Vulkan {
   type GraphicsPipeline = VulkanGraphicsPipeline;
   type CommandList = VulkanCommandList<Self>;
 
-  fn create_device(window: Option<&winit::window::Window>) -> Self::Device {
-    // Creating an instance
+  fn create_device(
+    window: Option<Arc<winit::window::Window>>,
+  ) -> (Self::Device, Option<Self::Swapchain>) {
+    use vulkano::device::{physical::PhysicalDeviceType, DeviceExtensions};
+    use vulkano::image::ImageUsage;
     use vulkano::instance::{Instance, InstanceCreateInfo};
+    use vulkano::swapchain::{Swapchain, SwapchainCreateInfo};
     use vulkano::VulkanLibrary;
-    let library = VulkanLibrary::new().expect("no local Vulkan library/DLL");
-    println!("Using Vulkan {:?}", library.api_version());
+
+    // Creating an instance
+    let library = VulkanLibrary::new().expect("No local Vulkan library/DLL");
+    println!("Vulkan {:?}", library.api_version());
 
     #[cfg(windows)]
-    let instance_create_into = InstanceCreateInfo::default();
+    let mut instance_create_info = InstanceCreateInfo::default();
+
     #[cfg(target_os = "macos")]
-    let instance_create_info = InstanceCreateInfo {
+    let mut instance_create_info = InstanceCreateInfo {
       enumerate_portability: true,
       ..Default::default()
     };
-    let instance = Instance::new(library, instance_create_info).expect("failed to create instance");
-    // Enumerating physical devices
-    let physical = instance
-      .enumerate_physical_devices()
-      .expect("could not enumerate devices")
-      .next()
-      .expect("no devices available");
-    for family in physical.queue_family_properties() {
-      println!(
-        "Found a queue family with {:?} queue(s)",
-        family.queue_count
-      );
+
+    if window.is_some() {
+      let required_extensions = vulkano_win::required_extensions(&library);
+      instance_create_info.enabled_extensions = required_extensions;
     }
-    // Creating a device
-    let queue_family_index = physical
-      .queue_family_properties()
-      .iter()
-      .enumerate()
-      .position(|(_, q)| q.queue_flags.graphics)
-      .expect("couldn't find a graphical queue family") as u32;
+    let instance =
+      Instance::new(library, instance_create_info).expect("Failed to create vulkan instance");
+
+    let surface = window.and_then(|window| {
+      Some(
+        vulkano_win::create_surface_from_handle(window, instance.clone())
+          .expect("Unable to create surface from window"),
+      )
+    });
+
+    // Enumerating physical devices
+    let device_extensions = DeviceExtensions {
+      khr_swapchain: true,
+      ..DeviceExtensions::empty()
+    };
+    let (physical, queue_family_index) = instance
+      .enumerate_physical_devices()
+      .expect("Could not enumerate devices")
+      .filter(|p| p.supported_extensions().contains(&device_extensions))
+      .filter_map(|p| {
+        p.queue_family_properties()
+          .iter()
+          .enumerate()
+          // Find the first first queue family that is suitable.
+          // If none is found, `None` is returned to `filter_map`,
+          // which disqualifies this physical device.
+          .position(|(i, q)| {
+            q.queue_flags.graphics
+              && (surface.is_some()
+                && p
+                  .surface_support(i as u32, surface.as_ref().unwrap())
+                  .unwrap_or(false))
+          })
+          .map(|q| (p, q as u32))
+      })
+      .min_by_key(|(p, _)| match p.properties().device_type {
+        PhysicalDeviceType::DiscreteGpu => 0,
+        PhysicalDeviceType::IntegratedGpu => 1,
+        PhysicalDeviceType::VirtualGpu => 2,
+        PhysicalDeviceType::Cpu => 3,
+
+        // Note that there exists `PhysicalDeviceType::Other`, however,
+        // `PhysicalDeviceType` is a non-exhaustive enum. Thus, one should
+        // match wildcard `_` to catch all unknown device types.
+        _ => 4,
+      })
+      .expect("No devices available");
+    println!(
+      "Found a queue family with {:?} queue(s)",
+      physical.queue_family_properties()[queue_family_index as usize].queue_count
+    );
 
     use vulkano::device::{Device, DeviceCreateInfo, Features, QueueCreateInfo};
     let (device, mut queues) = Device::new(
-      physical,
+      physical.clone(),
       DeviceCreateInfo {
         // here we pass the desired queue family to use by index
         queue_create_infos: vec![QueueCreateInfo {
           queue_family_index,
           ..Default::default()
         }],
+        enabled_extensions: device_extensions,
         ..Default::default()
       },
     )
-    .expect("failed to create device");
+    .expect("Failed to create device");
     let queue = queues.next().unwrap();
 
-    VulkanDevice {
-      instance,
-      // physical,
-      device,
-      queue,
-      queue_family_index,
-    }
+    // Creating the swapchain
+    let swapchain = surface.and_then(|surface| {
+      let caps = physical
+        .surface_capabilities(&surface, Default::default())
+        .expect("Failed to get surface capabilities");
+      let dimensions = surface.window().inner_size();
+      let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
+      let image_format = Some(
+        physical
+          .surface_formats(&surface, Default::default())
+          .unwrap()[0]
+          .0,
+      );
+
+      let (swapchain, images) = Swapchain::new(
+        device.clone(),
+        surface.clone(),
+        SwapchainCreateInfo {
+          min_image_count: caps.min_image_count + 1, // How many buffers to use in the swapchain
+          image_format,
+          image_extent: dimensions.into(),
+          image_usage: ImageUsage {
+            color_attachment: true, // What the images are going to be used for
+            ..Default::default()
+          },
+          composite_alpha,
+          ..Default::default()
+        },
+      )
+      .unwrap();
+
+      Some(VulkanSwapchain {
+        handle: swapchain,
+        surface,
+        images,
+      })
+    });
+
+    (
+      VulkanDevice {
+        instance,
+        // physical,
+        device,
+        queue,
+        queue_family_index,
+      },
+      swapchain,
+    )
   }
 
   fn create_buffer_with_init<T: BufferContents + Pod>(
@@ -87,7 +169,7 @@ impl Backend for Vulkan {
 
     let buffer =
       CpuAccessibleBuffer::<T>::from_data(device.device.clone(), usage.into(), false, data)
-        .expect("failed to create buffer");
+        .expect("Failed to create buffer");
     let access = buffer.clone();
     VulkanBuffer {
       handle: buffer,
@@ -174,7 +256,7 @@ impl Backend for Vulkan {
     color_attachments: &[&Self::Texture],
     depth_attachment: Option<&Self::Texture>,
   ) -> Self::RenderPass {
-    use vulkano::image::{ImageAspects, ImageLayout, SampleCount};
+    use vulkano::image::{ImageLayout, SampleCount};
     use vulkano::render_pass::{
       AttachmentDescription, AttachmentReference, LoadOp, RenderPass, RenderPassCreateInfo,
       StoreOp, SubpassDescription,
@@ -347,7 +429,7 @@ impl Backend for Vulkan {
       false,
       (0..1024 * 1024 * 4).map(|_| 255u8),
     )
-    .expect("failed to create buffer");
+    .expect("Failed to create buffer");
 
     let mut builder = AutoCommandBufferBuilder::primary(
       device.device.clone(),
@@ -483,6 +565,12 @@ pub struct VulkanDevice {
   device: Arc<vulkano::device::Device>,
   queue: Arc<vulkano::device::Queue>,
   queue_family_index: u32,
+}
+
+pub struct VulkanSwapchain {
+  handle: Arc<vulkano::swapchain::Swapchain<Arc<winit::window::Window>>>,
+  surface: Arc<vulkano::swapchain::Surface<Arc<winit::window::Window>>>,
+  images: Vec<Arc<vulkano::image::SwapchainImage<Arc<winit::window::Window>>>>,
 }
 
 trait VulkanBufferTrait {

@@ -14,4 +14,4 @@ Cargo.lock
 *.pdb
 
 # SPIRV files
-.spv
+*.spv

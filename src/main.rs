@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use flux::{core, gfx, math, prefabs, raytrace};
 use specs::{Join, WorldExt};
 
@@ -177,7 +179,12 @@ fn main() {
   // app.run::<RealtimeState>(event_loop);
 
   use flux::gfx::{backend::Vulkan, BufferUsage, Format, RenderDevice};
-  let mut render_device = RenderDevice::<Vulkan>::new(None);
+  use winit::event_loop::EventLoop;
+  use winit::window::WindowBuilder;
+  let event_loop = EventLoop::new();
+  let window = Arc::new(WindowBuilder::new().build(&event_loop).unwrap());
+
+  let mut render_device = RenderDevice::<Vulkan>::new(Some(window));
 
   let texture = render_device.create_texture((1024, 1024, 1), Format::R8G8B8A8_UNORM);
   let vertex_buffer = render_device.create_buffer_with_init(
@@ -196,6 +203,5 @@ fn main() {
     .submit();
 
   render_device.save_texture_to_disk(&texture);
-
   println!("Test completed");
 }

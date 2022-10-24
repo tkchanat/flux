@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, io::Read, ops::Range};
+use std::{cell::RefCell, collections::HashMap, io::Read, ops::Range, sync::Arc};
 
 use super::{
   BindGroup, BindGroupEntry, BindGroupLayout, Buffer, Format, GraphicsPipeline, IndexBuffer,
@@ -624,6 +624,7 @@ bitflags::bitflags! {
 
 pub trait Backend {
   type Device;
+  type Swapchain;
   type Buffer;
   type Texture;
   type Sampler;
@@ -632,7 +633,9 @@ pub trait Backend {
   type GraphicsPipeline;
   type CommandList;
 
-  fn create_device(window: Option<&winit::window::Window>) -> Self::Device;
+  fn create_device(
+    window: Option<Arc<winit::window::Window>>,
+  ) -> (Self::Device, Option<Self::Swapchain>);
 
   // Buffer
   fn create_buffer_with_init<T: BufferContents + Pod>(
@@ -756,6 +759,7 @@ impl<'a, B: Backend> CommandList<'a, B> {
 
 pub struct RenderDevice<B: Backend> {
   device: B::Device,
+  swapchain: Option<B::Swapchain>,
   buffers: slab::Slab<B::Buffer>,
   textures: slab::Slab<B::Texture>,
   samplers: slab::Slab<B::Sampler>,
@@ -764,10 +768,11 @@ pub struct RenderDevice<B: Backend> {
   graphics_pipelines: slab::Slab<B::GraphicsPipeline>,
 }
 impl<B: Backend> RenderDevice<B> {
-  pub fn new(window: Option<&winit::window::Window>) -> Self {
-    let device = B::create_device(window);
+  pub fn new(window: Option<Arc<winit::window::Window>>) -> Self {
+    let (device, swapchain) = B::create_device(window);
     Self {
       device,
+      swapchain,
       buffers: slab::Slab::new(),
       textures: slab::Slab::new(),
       samplers: slab::Slab::new(),
