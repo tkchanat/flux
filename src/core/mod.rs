@@ -1,6 +1,7 @@
 pub mod scene;
 pub mod app;
 pub mod input;
+pub mod node;
 pub use app::*;
 pub use scene::*;
 pub use input::*;

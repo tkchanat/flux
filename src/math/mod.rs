@@ -4,6 +4,7 @@ use std::f32::consts::PI;
 
 pub use color::*;
 pub use ray::*;
+// pub type Transform = glam::Affine3A;
 
 /// Uniformly distribute samples over a unit disk.
 pub fn concentric_sample_disk(u: &glam::Vec2) -> glam::Vec2 {

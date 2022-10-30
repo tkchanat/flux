@@ -149,7 +149,6 @@ impl Scene {
   pub fn new() -> Self {
     let mut world = World::new();
     world.register::<Relationship>();
-    world.register::<prefabs::GeomSphere>();
     world.register::<prefabs::Camera>();
     world.register::<gfx::Transform>();
     world.register::<gfx::Mesh>();

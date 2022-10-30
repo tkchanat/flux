@@ -16,6 +16,7 @@ bytemuck = { version = "1.4", features = ["derive"] }
 cfg-if = "1"
 env_logger = "0.9"
 enum-map = "2.4"
+flux-gfx = { path = "flux-gfx", version = "0.1" }
 getrandom = { version = "0.2", features = ["js"] }
 glam = "0.21"
 gltf = "1.0"
