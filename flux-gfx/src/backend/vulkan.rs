@@ -1,7 +1,7 @@
 extern crate alloc;
 use crate::{
-  buffer::{Buffer, BufferContents, BufferUsage},
-  device::Backend,
+  buffer::BufferUsage,
+  device::{AcquireSwapchainError, Backend},
   pipeline::GraphicsPipelineDesc,
   texture::Format,
 };
@@ -16,20 +16,21 @@ impl Backend for Vulkan {
   type Texture = VulkanTexture;
   type Sampler = ();
   type Descriptor = ();
-  type RenderPass = VulkanRenderPass;
+  type RenderPass = Arc<vulkano::render_pass::RenderPass>;
+  type Framebuffer = Arc<vulkano::render_pass::Framebuffer>;
   type GraphicsPipeline = VulkanGraphicsPipeline;
-  type CommandList = VulkanCommandList<Self>;
+  type CommandList = VulkanCommandList;
 
   fn create_device(
     window: Option<Arc<winit::window::Window>>,
-  ) -> (Self::Device, Option<Self::Swapchain>) {
+  ) -> (Self::Device, Option<(Self::Swapchain, Self::RenderPass)>) {
     use vulkano::device::{
       physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo,
     };
     use vulkano::image::{view::ImageView, ImageUsage};
     use vulkano::instance::{Instance, InstanceCreateInfo};
     use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo};
-    use vulkano::swapchain::{Swapchain, SwapchainCreateInfo};
+    use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
     use vulkano::VulkanLibrary;
 
     // Creating an instance
@@ -126,12 +127,23 @@ impl Backend for Vulkan {
         .expect("Failed to get surface capabilities");
       let dimensions = surface.window().inner_size();
       let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
-      let image_format = Some(
-        physical
+      let image_format = {
+        let formats = physical
           .surface_formats(&surface, Default::default())
-          .unwrap()[0]
-          .0,
-      );
+          .unwrap();
+        // println!("Swapchain formats: {:?}", formats);
+        Some(
+          formats
+            .get(
+              formats
+                .iter()
+                .position(|(format, _)| *format == vulkano::format::Format::B8G8R8A8_SRGB)
+                .unwrap_or(0),
+            )
+            .unwrap()
+            .0,
+        )
+      };
 
       let (swapchain, images) = Swapchain::new(
         device.clone(),
@@ -182,13 +194,15 @@ impl Backend for Vulkan {
         })
         .collect::<Vec<_>>();
 
-      Some(VulkanSwapchain {
-        handle: swapchain,
-        surface,
-        images,
+      Some((
+        VulkanSwapchain {
+          handle: swapchain,
+          surface,
+          images,
+          framebuffers,
+        },
         render_pass,
-        framebuffers,
-      })
+      ))
     });
 
     (
@@ -203,21 +217,65 @@ impl Backend for Vulkan {
     )
   }
 
-  fn create_buffer<T: Pod>(device: &Self::Device, usage: BufferUsage, data: T) -> Self::Buffer {
+  fn begin_frame(
+    device: &Self::Device,
+    swapchain: &Self::Swapchain,
+  ) -> Result<Self::CommandList, AcquireSwapchainError> {
+    use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage};
+    use vulkano::swapchain::{AcquireError, PresentInfo};
+
+    let (image_i, suboptimal, acquire_future) =
+      match vulkano::swapchain::acquire_next_image(swapchain.handle.clone(), None) {
+        Ok(r) => r,
+        Err(AcquireError::OutOfDate) => {
+          return Err(AcquireSwapchainError::OutOfDate);
+        }
+        Err(AcquireError::Timeout) => {
+          return Err(AcquireSwapchainError::Timeout);
+        }
+        Err(e) => panic!("Failed to acquire next image: {:?}", e),
+      };
+
+    if suboptimal {
+      return Err(AcquireSwapchainError::Suboptimal);
+    }
+
+    // Prepare present command buffer
+    let command_list = VulkanCommandList {
+      builder: AutoCommandBufferBuilder::primary(
+        device.device.clone(),
+        device.queue_family_index,
+        CommandBufferUsage::OneTimeSubmit,
+      )
+      .unwrap(),
+      present_resources: Some(PresentResources {
+        acquire_future,
+        framebuffer: swapchain.framebuffers[image_i].clone(),
+        present_info: PresentInfo {
+          index: image_i,
+          ..PresentInfo::swapchain(swapchain.handle.clone())
+        },
+      }),
+    };
+
+    Ok(command_list)
+  }
+
+  fn create_buffer(device: &Self::Device, usage: BufferUsage, data: &[u8]) -> Self::Buffer {
     use vulkano::buffer::CpuAccessibleBuffer;
 
     let buffer = unsafe {
       CpuAccessibleBuffer::<[u8]>::uninitialized_array(
         device.device.clone(),
-        std::mem::size_of::<T>() as u64,
+        data.len() as u64,
         usage.into(),
         false,
       )
       .expect("Failed to create buffer")
     };
-    unsafe {
+    {
       let mut mapping = buffer.write().unwrap();
-      core::ptr::write::<T>(bytemuck::from_bytes_mut(&mut *mapping), data)
+      mapping.copy_from_slice(data);
     }
     let access = buffer.clone();
 
@@ -227,7 +285,7 @@ impl Backend for Vulkan {
     }
   }
 
-  fn create_buffer_raw(device: &Self::Device, usage: BufferUsage, size: usize) -> Self::Buffer {
+  fn create_buffer_uninit(device: &Self::Device, usage: BufferUsage, size: usize) -> Self::Buffer {
     use vulkano::buffer::CpuAccessibleBuffer;
 
     let buffer = unsafe {
@@ -247,41 +305,9 @@ impl Backend for Vulkan {
     }
   }
 
-  fn map_buffer<T: BufferContents + Pod, F: Fn(&mut T)>(buffer: &Self::Buffer, f: F) {
+  fn map_buffer<T: bytemuck::Pod, F: Fn(&mut T)>(buffer: &Self::Buffer, f: F) {
     let mut content = buffer.handle.write().unwrap();
     f(bytemuck::from_bytes_mut(&mut content));
-  }
-
-  fn copy_buffer_to_buffer(
-    command_list: &mut Self::CommandList,
-    src: &Self::Buffer,
-    dst: &Self::Buffer,
-  ) {
-    use vulkano::command_buffer::CopyBufferInfo;
-
-    command_list
-      .builder
-      .copy_buffer(CopyBufferInfo::buffers(
-        src.access.clone(),
-        dst.access.clone(),
-      ))
-      .unwrap();
-  }
-
-  fn copy_texture_to_buffer(
-    command_list: &mut Self::CommandList,
-    src: &Self::Texture,
-    dst: &Self::Buffer,
-  ) {
-    use vulkano::command_buffer::CopyImageToBufferInfo;
-
-    command_list
-      .builder
-      .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
-        src.handle.clone(),
-        dst.access.clone(),
-      ))
-      .unwrap();
   }
 
   fn create_texture(
@@ -290,13 +316,16 @@ impl Backend for Vulkan {
     format: Format,
   ) -> Self::Texture {
     use vulkano::image::view::ImageView;
-    use vulkano::image::{AttachmentImage, ImageDimensions, ImageLayout, StorageImage, ImageUsage};
+    use vulkano::image::{AttachmentImage, ImageDimensions, ImageLayout, ImageUsage, StorageImage};
 
     let handle = AttachmentImage::with_usage(
       device.device.clone(),
       [extent.0, extent.1],
       format.into(),
-      ImageUsage { transfer_src: true, ..Default::default() }
+      ImageUsage {
+        transfer_src: true,
+        ..Default::default()
+      },
     )
     .unwrap();
     let view = ImageView::new_default(handle.clone()).unwrap();
@@ -317,8 +346,8 @@ impl Backend for Vulkan {
   ) -> Self::RenderPass {
     use vulkano::image::{ImageLayout, SampleCount};
     use vulkano::render_pass::{
-      AttachmentDescription, AttachmentReference, LoadOp, RenderPass, RenderPassCreateInfo,
-      StoreOp, SubpassDescription,
+      AttachmentDescription, AttachmentReference, Framebuffer, FramebufferCreateInfo, LoadOp,
+      RenderPass, RenderPassCreateInfo, StoreOp, SubpassDescription,
     };
 
     // let attachments = color_attachments.iter().chain(depth_attachment.iter());
@@ -360,7 +389,7 @@ impl Backend for Vulkan {
       color_attachments: color_attachments
         .iter()
         .enumerate()
-        .map(|(i, color)| {
+        .map(|(i, _)| {
           Some(AttachmentReference {
             attachment: i as u32,
             layout: ImageLayout::ColorAttachmentOptimal,
@@ -369,7 +398,7 @@ impl Backend for Vulkan {
         })
         .collect::<Vec<_>>(),
       resolve_attachments: Vec::new(),
-      depth_stencil_attachment: depth_attachment.and_then(|depth| {
+      depth_stencil_attachment: depth_attachment.and_then(|_| {
         Some(AttachmentReference {
           attachment: (attachments.len() - 1) as u32,
           layout: ImageLayout::DepthStencilAttachmentOptimal,
@@ -387,12 +416,8 @@ impl Backend for Vulkan {
       correlated_view_masks: Vec::new(),
       ..Default::default()
     };
-    let render_pass =
-      RenderPass::new(device.device.clone(), create_info).expect("Unable to build render pass");
 
-    VulkanRenderPass {
-      handle: render_pass,
-    }
+    RenderPass::new(device.device.clone(), create_info).expect("Unable to build render pass")
   }
 
   fn create_graphics_pipeline(
@@ -426,9 +451,9 @@ impl Backend for Vulkan {
 
     // More on this latter
     let viewport = Viewport {
-      origin: [0.0, 0.0],
-      dimensions: [1024.0, 1024.0],
-      depth_range: 0.0..1.0,
+      origin: [desc.viewport.offset.0, desc.viewport.offset.1],
+      dimensions: [desc.viewport.dimensions.0, desc.viewport.dimensions.1],
+      depth_range: desc.viewport.depth_range.clone(),
     };
 
     let input_state = {
@@ -487,7 +512,7 @@ impl Backend for Vulkan {
       // Rasterization
       .rasterization_state(RasterizationState::default().cull_mode(CullMode::None))
       // This graphics pipeline object concerns the first pass of the render pass.
-      .render_pass(Subpass::from(render_pass.handle.clone(), 0).unwrap())
+      .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
       // Now that everything is specified, we call `build`.
       .build(device.device.clone())
       .unwrap();
@@ -511,7 +536,26 @@ impl Backend for Vulkan {
 
     VulkanCommandList {
       builder,
-      _pd: std::marker::PhantomData::default(),
+      present_resources: None,
+    }
+  }
+
+  fn begin_final_pass(command_list: &mut Self::CommandList) {
+    use vulkano::command_buffer::{RenderPassBeginInfo, SubpassContents};
+
+    if let Some(present_resources) = &command_list.present_resources {
+      command_list
+        .builder
+        .begin_render_pass(
+          RenderPassBeginInfo {
+            clear_values: (0..present_resources.framebuffer.attachments().len())
+              .map(|_| Some([0.0, 0.0, 0.0, 1.0].into()))
+              .collect::<Vec<_>>(),
+            ..RenderPassBeginInfo::framebuffer(present_resources.framebuffer.clone())
+          },
+          SubpassContents::Inline,
+        )
+        .unwrap();
     }
   }
 
@@ -525,7 +569,7 @@ impl Backend for Vulkan {
     use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo};
 
     let framebuffer = Framebuffer::new(
-      render_pass.handle.clone(),
+      render_pass.clone(),
       FramebufferCreateInfo {
         attachments: color_attachments
           .iter()
@@ -535,13 +579,13 @@ impl Backend for Vulkan {
       },
     )
     .unwrap();
+
     command_list
       .builder
       .begin_render_pass(
         RenderPassBeginInfo {
-          clear_values: color_attachments
-            .iter()
-            .map(|color| Some([0.0, 0.0, 0.0, 1.0].into()))
+          clear_values: (0..framebuffer.attachments().len())
+            .map(|_| Some([0.0, 0.0, 0.0, 1.0].into()))
             .collect::<Vec<_>>(),
           ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
         },
@@ -582,16 +626,68 @@ impl Backend for Vulkan {
       .unwrap();
   }
 
+  fn copy_buffer_to_buffer(
+    command_list: &mut Self::CommandList,
+    src: &Self::Buffer,
+    dst: &Self::Buffer,
+  ) {
+    use vulkano::command_buffer::CopyBufferInfo;
+
+    command_list
+      .builder
+      .copy_buffer(CopyBufferInfo::buffers(
+        src.access.clone(),
+        dst.access.clone(),
+      ))
+      .unwrap();
+  }
+
+  fn copy_texture_to_buffer(
+    command_list: &mut Self::CommandList,
+    src: &Self::Texture,
+    dst: &Self::Buffer,
+  ) {
+    use vulkano::command_buffer::CopyImageToBufferInfo;
+
+    command_list
+      .builder
+      .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
+        src.handle.clone(),
+        dst.access.clone(),
+      ))
+      .unwrap();
+  }
+
   fn submit(device: &Self::Device, command_list: Self::CommandList) {
-    use vulkano::sync::{self, GpuFuture};
+    use vulkano::sync::{self, FlushError, GpuFuture};
 
     let command_buffer = command_list.builder.build().unwrap();
-    let future = sync::now(device.device.clone())
-      .then_execute(device.queue.clone(), command_buffer)
-      .unwrap()
-      .then_signal_fence_and_flush()
-      .unwrap();
-    future.wait(None).unwrap();
+    if let Some(present_resources) = command_list.present_resources {
+      let execution = sync::now(device.device.clone())
+        .join(present_resources.acquire_future)
+        .then_execute(device.queue.clone(), command_buffer)
+        .unwrap()
+        .then_swapchain_present(device.queue.clone(), present_resources.present_info)
+        .then_signal_fence_and_flush();
+      match execution {
+        Ok(future) => {
+          future.wait(None).unwrap(); // wait for the GPU to finish
+        }
+        Err(FlushError::OutOfDate) => {
+          todo!("recreate_swapchain = true");
+        }
+        Err(e) => {
+          println!("Failed to flush future: {:?}", e);
+        }
+      }
+    } else {
+      let future = sync::now(device.device.clone())
+        .then_execute(device.queue.clone(), command_buffer)
+        .unwrap()
+        .then_signal_fence_and_flush()
+        .unwrap();
+      future.wait(None).unwrap();
+    }
   }
 }
 
@@ -607,7 +703,6 @@ pub struct VulkanSwapchain {
   handle: Arc<vulkano::swapchain::Swapchain<Arc<winit::window::Window>>>,
   surface: Arc<vulkano::swapchain::Surface<Arc<winit::window::Window>>>,
   images: Vec<Arc<vulkano::image::SwapchainImage<Arc<winit::window::Window>>>>,
-  render_pass: Arc<vulkano::render_pass::RenderPass>,
   framebuffers: Vec<Arc<vulkano::render_pass::Framebuffer>>,
 }
 
@@ -623,19 +718,21 @@ pub struct VulkanTexture {
   layout: vulkano::image::ImageLayout,
 }
 
-pub struct VulkanRenderPass {
-  handle: Arc<vulkano::render_pass::RenderPass>,
-}
-
 pub struct VulkanGraphicsPipeline {
   handle: Arc<vulkano::pipeline::GraphicsPipeline>,
 }
 
-pub struct VulkanCommandList<B: Backend> {
+struct PresentResources {
+  acquire_future: vulkano::swapchain::SwapchainAcquireFuture<Arc<winit::window::Window>>,
+  framebuffer: Arc<vulkano::render_pass::Framebuffer>,
+  present_info: vulkano::swapchain::PresentInfo<Arc<winit::window::Window>>,
+}
+
+pub struct VulkanCommandList {
   builder: vulkano::command_buffer::AutoCommandBufferBuilder<
     vulkano::command_buffer::PrimaryAutoCommandBuffer,
   >,
-  _pd: std::marker::PhantomData<B>,
+  present_resources: Option<PresentResources>,
 }
 
 impl Into<vulkano::format::Format> for Format {

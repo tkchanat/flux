@@ -8,7 +8,15 @@ use crate::backend::Vulkan;
 use crate::pipeline::GraphicsPipelineDesc;
 use bytemuck::Pod;
 use std::sync::{Arc, RwLock};
-use vulkano::buffer::BufferContents;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum AcquireSwapchainError {
+  Timeout,
+  Suboptimal,
+  OutOfDate,
+  Lost,
+  OutOfMemory,
+}
 
 pub trait Backend {
   type Device;
@@ -18,21 +26,25 @@ pub trait Backend {
   type Sampler;
   type Descriptor;
   type RenderPass;
+  type Framebuffer;
   type GraphicsPipeline;
   type CommandList;
 
+  // Device
   fn create_device(
     window: Option<Arc<winit::window::Window>>,
-  ) -> (Self::Device, Option<Self::Swapchain>);
+  ) -> (Self::Device, Option<(Self::Swapchain, Self::RenderPass)>);
+
+  // Swapchain
+  fn begin_frame(
+    device: &Self::Device,
+    swapchain: &Self::Swapchain,
+  ) -> Result<Self::CommandList, AcquireSwapchainError>;
 
   // Buffer
-  fn create_buffer<T: BufferContents + Pod>(
-    device: &Self::Device,
-    usage: BufferUsage,
-    data: T,
-  ) -> Self::Buffer;
-  fn create_buffer_raw(device: &Self::Device, usage: BufferUsage, size: usize) -> Self::Buffer;
-  fn map_buffer<T: BufferContents + Pod, F: Fn(&mut T)>(buffer: &Self::Buffer, f: F);
+  fn create_buffer(device: &Self::Device, usage: BufferUsage, data: &[u8]) -> Self::Buffer;
+  fn create_buffer_uninit(device: &Self::Device, usage: BufferUsage, size: usize) -> Self::Buffer;
+  fn map_buffer<T: bytemuck::Pod, F: Fn(&mut T)>(buffer: &Self::Buffer, f: F);
 
   // Texture
   fn create_texture(
@@ -52,11 +64,12 @@ pub trait Backend {
   fn create_graphics_pipeline(
     device: &Self::Device,
     desc: &GraphicsPipelineDesc,
-    framebuffer: &Self::RenderPass,
+    render_pass: &Self::RenderPass,
   ) -> Self::GraphicsPipeline;
 
   // Command List
   fn create_command_list(device: &Self::Device) -> Self::CommandList;
+  fn begin_final_pass(command_list: &mut Self::CommandList);
   fn begin_render_pass(
     command_list: &mut Self::CommandList,
     render_pass: &Self::RenderPass,
@@ -94,7 +107,11 @@ pub struct CommandList<'a> {
   command_list: <B as Backend>::CommandList,
 }
 impl<'a> CommandList<'a> {
-  pub fn begin_render_pass(mut self, render_pass: &RenderPass) -> Self {
+  pub fn begin_final_pass(&mut self) -> &mut Self {
+    B::begin_final_pass(&mut self.command_list);
+    self
+  }
+  pub fn begin_render_pass(&mut self, render_pass: &RenderPass) -> &mut Self {
     let textures_read = self.device.textures.read().unwrap();
     let render_passes_read = self.device.render_passes.read().unwrap();
     let color_attachments = render_pass
@@ -114,11 +131,11 @@ impl<'a> CommandList<'a> {
     );
     self
   }
-  pub fn end_render_pass(mut self) -> Self {
+  pub fn end_render_pass(&mut self) -> &mut Self {
     B::end_render_pass(&mut self.command_list);
     self
   }
-  pub fn bind_graphics_pipeline(mut self, pipeline: &GraphicsPipeline) -> Self {
+  pub fn bind_graphics_pipeline(&mut self, pipeline: &GraphicsPipeline) -> &mut Self {
     if let Some(pipeline) = self
       .device
       .graphics_pipelines
@@ -130,7 +147,7 @@ impl<'a> CommandList<'a> {
     }
     self
   }
-  pub fn bind_vertex_buffer(mut self, buffer: &Buffer) -> Self {
+  pub fn bind_vertex_buffer(&mut self, buffer: &Buffer) -> &mut Self {
     if let Some(buffer) = self
       .device
       .buffers
@@ -143,12 +160,12 @@ impl<'a> CommandList<'a> {
     self
   }
   pub fn draw(
-    mut self,
+    &mut self,
     vertex_count: u32,
     instance_count: u32,
     first_vertex: u32,
     first_instance: u32,
-  ) -> Self {
+  ) -> &mut Self {
     B::draw(
       &mut self.command_list,
       vertex_count,
@@ -158,7 +175,7 @@ impl<'a> CommandList<'a> {
     );
     self
   }
-  pub fn copy_buffer_to_buffer(mut self, src: &Buffer, dst: &Buffer) -> Self {
+  pub fn copy_buffer_to_buffer(&mut self, src: &Buffer, dst: &Buffer) -> &mut Self {
     if let (Some(src), Some(dst)) = (
       self.device.buffers.read().unwrap().get(src.handle.unwrap()),
       self.device.buffers.read().unwrap().get(dst.handle.unwrap()),
@@ -167,7 +184,7 @@ impl<'a> CommandList<'a> {
     }
     self
   }
-  pub fn copy_texture_to_buffer(mut self, src: &Texture, dst: &Buffer) -> Self {
+  pub fn copy_texture_to_buffer(&mut self, src: &Texture, dst: &Buffer) -> &mut Self {
     if let (Some(src), Some(dst)) = (
       self
         .device
@@ -191,9 +208,14 @@ pub(crate) static mut RENDER_DEVICE: Option<Arc<RenderDevice>> = None;
 #[cfg(feature = "vulkan")]
 type B = Vulkan;
 
+struct Swapchain {
+  data: <B as Backend>::Swapchain,
+  final_pass: <B as Backend>::RenderPass,
+}
+
 pub struct RenderDevice {
   device: <B as Backend>::Device,
-  swapchain: Option<<B as Backend>::Swapchain>,
+  swapchain: Option<(<B as Backend>::Swapchain, <B as Backend>::RenderPass)>,
   buffers: RwLock<slab::Slab<<B as Backend>::Buffer>>,
   textures: RwLock<slab::Slab<<B as Backend>::Texture>>,
   samplers: RwLock<slab::Slab<<B as Backend>::Sampler>>,
@@ -220,19 +242,19 @@ impl RenderDevice {
     render_device
   }
 
-  pub fn create_buffer<T: BufferContents + Pod>(&self, usage: BufferUsage, data: T) -> Buffer {
+  pub fn create_buffer(&self, usage: BufferUsage, data: &[u8]) -> Buffer {
     let buffer = B::create_buffer(&self.device, usage, data);
     let handle = Some(self.buffers.write().unwrap().insert(buffer));
     Buffer { handle }
   }
 
   pub fn create_buffer_raw(&self, usage: BufferUsage, size: usize) -> Buffer {
-    let buffer = B::create_buffer_raw(&self.device, usage, size);
+    let buffer = B::create_buffer_uninit(&self.device, usage, size);
     let handle = Some(self.buffers.write().unwrap().insert(buffer));
     Buffer { handle }
   }
 
-  pub fn map_buffer<T: BufferContents + Pod, F: Fn(&mut T)>(&self, buffer: &Buffer, f: F) {
+  pub fn map_buffer<T: bytemuck::Pod, F: Fn(&mut T)>(&self, buffer: &Buffer, f: F) {
     if let Some(buffer) = self.buffers.read().unwrap().get(buffer.handle.unwrap()) {
       B::map_buffer(buffer, f);
     }
@@ -241,7 +263,7 @@ impl RenderDevice {
   pub fn create_texture(&self, extent: (u32, u32, u32), format: Format) -> Texture {
     let texture = B::create_texture(&self.device, extent, format);
     let handle = Some(self.textures.write().unwrap().insert(texture));
-    Texture { handle }
+    Texture { handle, extent }
   }
 
   pub fn create_render_pass(
@@ -270,26 +292,44 @@ impl RenderDevice {
   pub fn create_graphics_pipeline(
     &self,
     desc: &GraphicsPipelineDesc,
-    render_pass: &RenderPass,
+    render_pass: Option<&RenderPass>,
   ) -> GraphicsPipeline {
     let render_passes_read = self.render_passes.read().unwrap();
-    let render_pass = render_passes_read.get(render_pass.handle).unwrap();
-    let pipeline = B::create_graphics_pipeline(&self.device, desc, render_pass);
+    let render_pass = match render_pass {
+      Some(render_pass) => render_passes_read.get(render_pass.handle).unwrap(),
+      None => &self.swapchain.as_ref().expect("No swapchain").1,
+    };
+    let pipeline = B::create_graphics_pipeline(&self.device, &desc, render_pass);
     let handle = self.graphics_pipelines.write().unwrap().insert(pipeline);
     GraphicsPipeline { handle }
   }
 
-  pub fn create_command_list<'a>(&'a self) -> CommandList {
+  pub fn create_command_list(&self) -> CommandList {
     CommandList {
-      device: self,
+      device: &self,
       command_list: B::create_command_list(&self.device),
     }
   }
+
+  pub fn execute_frame<F: Fn(&mut CommandList)>(&self, f: F) {
+    let swapchain = self.swapchain.as_ref().expect("No swapchain");
+    match B::begin_frame(&self.device, &swapchain.0) {
+      Ok(command_list) => {
+        let mut command_list = CommandList {
+          device: self,
+          command_list,
+        };
+        f(&mut command_list);
+        command_list.submit();
+      }
+      Err(_) => todo!("recreate swapchain"),
+    }
+  }
 }
-// impl Drop for RenderDevice {
-//   fn drop(&mut self) {
-//     unsafe {
-//       RENDER_DEVICE = None;
-//     }
-//   }
-// }
+impl Drop for RenderDevice {
+  fn drop(&mut self) {
+    unsafe {
+      RENDER_DEVICE = None;
+    }
+  }
+}

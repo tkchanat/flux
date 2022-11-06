@@ -4,70 +4,6 @@ use bytemuck::{
 };
 use std::ops::Deref;
 
-pub unsafe trait BufferContents: Send + Sync + 'static {
-  /// Converts an immutable reference to `Self` to an immutable byte slice.
-  fn as_bytes(&self) -> &[u8];
-
-  /// Converts an immutable byte slice into an immutable reference to `Self`.
-  fn from_bytes(bytes: &[u8]) -> Result<&Self, PodCastError>;
-
-  /// Converts a mutable byte slice into a mutable reference to `Self`.
-  fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut Self, PodCastError>;
-
-  /// Returns the size of an element of the type.
-  fn size_of_element() -> u64;
-}
-
-unsafe impl<T> BufferContents for T
-where
-  T: Pod + Send + Sync,
-{
-  #[inline]
-  fn as_bytes(&self) -> &[u8] {
-    bytes_of(self)
-  }
-
-  #[inline]
-  fn from_bytes(bytes: &[u8]) -> Result<&T, PodCastError> {
-    try_from_bytes(bytes)
-  }
-
-  #[inline]
-  fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut T, PodCastError> {
-    try_from_bytes_mut(bytes)
-  }
-
-  #[inline]
-  fn size_of_element() -> u64 {
-    1
-  }
-}
-
-unsafe impl<T> BufferContents for [T]
-where
-  T: Pod + Send + Sync,
-{
-  #[inline]
-  fn as_bytes(&self) -> &[u8] {
-    cast_slice(self)
-  }
-
-  #[inline]
-  fn from_bytes(bytes: &[u8]) -> Result<&[T], PodCastError> {
-    try_cast_slice(bytes)
-  }
-
-  #[inline]
-  fn from_bytes_mut(bytes: &mut [u8]) -> Result<&mut [T], PodCastError> {
-    try_cast_slice_mut(bytes)
-  }
-
-  #[inline]
-  fn size_of_element() -> u64 {
-    std::mem::size_of::<T>() as u64
-  }
-}
-
 bitflags::bitflags! {
   pub struct BufferUsage: u32 {
     const TRANSFER_SRC = 0b1;
@@ -97,7 +33,7 @@ impl Buffer {
     }
   }
 
-  pub fn map<T: BufferContents + Pod, F: Fn(&mut T)>(&self, f: F) {
+  pub fn map<T: bytemuck::Pod, F: Fn(&mut T)>(&self, f: F) {
     unsafe {
       if let Some(device) = crate::device::RENDER_DEVICE.as_ref() {
         device.map_buffer(&self, f);
@@ -110,18 +46,18 @@ pub struct VertexBuffer {
   pub(super) buffer: Buffer,
 }
 impl VertexBuffer {
-  pub fn new<B: BufferContents + Pod>(data: B) -> Self {
-    unsafe {
-      if let Some(device) = crate::device::RENDER_DEVICE.as_ref() {
-        Self {
-          buffer: device.create_buffer(BufferUsage::VERTEX_BUFFER, data),
-        }
-      } else {
-        Self {
-          buffer: Buffer::default(),
-        }
-      }
-    }
+  pub fn new<B: bytemuck::Pod>(vertices: B) -> Self {
+    Self::from_slice(&[vertices])
+  }
+
+  pub fn from_slice<B: bytemuck::Pod>(vertices: &[B]) -> Self {
+    let buffer = unsafe {
+      crate::device::RENDER_DEVICE.as_ref().map_or_else(
+        || Buffer::default(),
+        |device| device.create_buffer(BufferUsage::VERTEX_BUFFER, bytemuck::cast_slice(vertices)),
+      )
+    };
+    Self { buffer }
   }
 }
 impl Deref for VertexBuffer {
@@ -136,24 +72,35 @@ pub enum IndexFormat {
   U32,
 }
 
+pub trait IndexType: bytemuck::Pod {
+  fn format() -> IndexFormat;
+}
+impl IndexType for u16 {
+  fn format() -> IndexFormat {
+    IndexFormat::U16
+  }
+}
+impl IndexType for u32 {
+  fn format() -> IndexFormat {
+    IndexFormat::U32
+  }
+}
+
 pub struct IndexBuffer {
   pub(super) buffer: Buffer,
   pub(super) format: IndexFormat,
 }
 impl IndexBuffer {
-  pub fn new<B: BufferContents + Pod>(data: B) -> Self {
-    unsafe {
-      if let Some(device) = crate::device::RENDER_DEVICE.as_ref() {
-        Self {
-          buffer: device.create_buffer(BufferUsage::INDEX_BUFFER, data),
-          format: IndexFormat::U32,
-        }
-      } else {
-        Self {
-          buffer: Buffer::default(),
-          format: IndexFormat::U32,
-        }
-      }
+  pub fn new<I: IndexType>(indices: &[I]) -> Self {
+    let buffer = unsafe {
+      crate::device::RENDER_DEVICE.as_ref().map_or_else(
+        || Buffer::default(),
+        |device| device.create_buffer(BufferUsage::INDEX_BUFFER, bytemuck::cast_slice(indices)),
+      )
+    };
+    Self {
+      buffer: Buffer::default(),
+      format: I::format(),
     }
   }
 }

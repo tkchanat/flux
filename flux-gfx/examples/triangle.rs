@@ -2,15 +2,18 @@ use flux_gfx::{
   backend::Vulkan,
   buffer::{Buffer, BufferUsage, VertexBuffer},
   device::RenderDevice,
-  pipeline::GraphicsPipelineDesc,
+  pipeline::{GraphicsPipelineDesc, Viewport},
   texture::Format,
 };
 
 fn main() {
   let render_device = RenderDevice::new(None);
 
-  let texture = render_device.create_texture((1024, 1024, 1), Format::R8G8B8A8_SRGB);
-  let buffer = Buffer::new(BufferUsage::TRANSFER_DST, 1024 * 1024 * 4);
+  const WIDTH: u32 = 1024;
+  const HEIGHT: u32 = 1024;
+  const BUFFER_SIZE: usize = WIDTH as usize * HEIGHT as usize * 4;
+  let texture = render_device.create_texture((WIDTH, HEIGHT, 1), Format::R8G8B8A8_SRGB);
+  let buffer = Buffer::new(BufferUsage::TRANSFER_DST, BUFFER_SIZE);
 
   let vertices: [[f32; 3]; 6] = [
     // position       // color
@@ -24,22 +27,22 @@ fn main() {
     &GraphicsPipelineDesc {
       vs_spv: include_bytes!("shaders/triangle.vert.spv"),
       fs_spv: include_bytes!("shaders/triangle.frag.spv"),
+      viewport: Viewport::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
     },
-    &render_pass,
+    Some(&render_pass),
   );
-  let command_list = render_device.create_command_list();
-  command_list
-    .begin_render_pass(&render_pass)
-    .bind_graphics_pipeline(&pipeline)
-    .bind_vertex_buffer(&vertex_buffer)
-    .draw(3, 1, 0, 0)
-    .end_render_pass()
-    .copy_texture_to_buffer(&texture, &buffer)
-    .submit();
+  let mut command_list = render_device.create_command_list();
+  command_list.begin_render_pass(&render_pass);
+  command_list.bind_graphics_pipeline(&pipeline);
+  command_list.bind_vertex_buffer(&vertex_buffer);
+  command_list.draw(3, 1, 0, 0);
+  command_list.end_render_pass();
+  command_list.copy_texture_to_buffer(&texture, &buffer);
+  command_list.submit();
 
-  buffer.map(|buffer_content: &mut [u8; 1024 * 1024 * 4]| {
+  buffer.map(|buffer_content: &mut [u8; BUFFER_SIZE]| {
     let image =
-      image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(1024, 1024, &buffer_content[..]).unwrap();
+      image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(WIDTH, HEIGHT, &buffer_content[..]).unwrap();
     image.save("image.png").unwrap();
   });
 }

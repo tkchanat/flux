@@ -3,11 +3,15 @@ use super::device::RenderDevice;
 #[derive(Copy, Clone, Debug)]
 pub struct Texture {
   pub(super) handle: Option<usize>,
+  pub(super) extent: (u32, u32, u32),
 }
 
 impl Texture {
-  pub fn new_2d(size: (u32, u32), format: Format) -> Self {
-    Self { handle: None }
+  pub fn new_2d(extent: (u32, u32), format: Format) -> Self {
+    Self {
+      handle: None,
+      extent: (extent.0, extent.1, 1),
+    }
   }
 
   pub fn update(&self, data: &[u8]) {}
