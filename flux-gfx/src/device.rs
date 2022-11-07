@@ -4,8 +4,8 @@ use super::{
   texture::Format,
   texture::{Sampler, Texture},
 };
-use crate::backend::Vulkan;
 use crate::pipeline::GraphicsPipelineDesc;
+use crate::{backend::Vulkan, pipeline::DescriptorWrite};
 use bytemuck::Pod;
 use std::sync::{Arc, RwLock};
 
@@ -18,7 +18,7 @@ pub enum AcquireSwapchainError {
   OutOfMemory,
 }
 
-pub trait Backend {
+pub(crate) trait Backend {
   type Device;
   type Swapchain;
   type Buffer;
@@ -82,11 +82,25 @@ pub trait Backend {
     pipeline: &Self::GraphicsPipeline,
   );
   fn bind_vertex_buffer(command_list: &mut Self::CommandList, buffer: &Self::Buffer);
+  fn bind_index_buffer(command_list: &mut Self::CommandList, buffer: &Self::Buffer);
+  fn bind_descriptors(
+    command_list: &mut Self::CommandList,
+    set: u32,
+    writes: &[DescriptorWriteAccess],
+  );
   fn draw(
     command_list: &mut Self::CommandList,
     vertex_count: u32,
     instance_count: u32,
     first_vertex: u32,
+    first_instance: u32,
+  );
+  fn draw_indexed(
+    command_list: &mut Self::CommandList,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
     first_instance: u32,
   );
   fn copy_buffer_to_buffer(
@@ -159,6 +173,44 @@ impl<'a> CommandList<'a> {
     }
     self
   }
+  pub fn bind_index_buffer(&mut self, buffer: &Buffer) -> &mut Self {
+    if let Some(buffer) = self
+      .device
+      .buffers
+      .read()
+      .unwrap()
+      .get(buffer.handle.unwrap())
+    {
+      B::bind_index_buffer(&mut self.command_list, buffer);
+    }
+    self
+  }
+  pub fn bind_descriptors(&mut self, set: u32, writes: &[DescriptorWrite]) -> &mut Self {
+    let buffers_read = self.device.buffers.read().unwrap();
+    let samplers_read = self.device.samplers.read().unwrap();
+    let textures_read = self.device.textures.read().unwrap();
+
+    let access = writes
+      .iter()
+      .filter_map(|write| match write {
+        DescriptorWrite::Invalid => None,
+        DescriptorWrite::Buffer(binding, handle) => Some(DescriptorWriteAccess::Buffer(
+          *binding,
+          buffers_read.get(*handle).unwrap(),
+        )),
+        DescriptorWrite::Sampler(binding, handle) => Some(DescriptorWriteAccess::Sampler(
+          *binding,
+          samplers_read.get(*handle).unwrap(),
+        )),
+        DescriptorWrite::Texture(binding, handle) => Some(DescriptorWriteAccess::Texture(
+          *binding,
+          textures_read.get(*handle).unwrap(),
+        )),
+      })
+      .collect::<Vec<_>>();
+    B::bind_descriptors(&mut self.command_list, set, &access);
+    self
+  }
   pub fn draw(
     &mut self,
     vertex_count: u32,
@@ -171,6 +223,24 @@ impl<'a> CommandList<'a> {
       vertex_count,
       instance_count,
       first_vertex,
+      first_instance,
+    );
+    self
+  }
+  pub fn draw_indexed(
+    &mut self,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+  ) -> &mut Self {
+    B::draw_indexed(
+      &mut self.command_list,
+      index_count,
+      instance_count,
+      first_index,
+      vertex_offset,
       first_instance,
     );
     self
@@ -208,9 +278,10 @@ pub(crate) static mut RENDER_DEVICE: Option<Arc<RenderDevice>> = None;
 #[cfg(feature = "vulkan")]
 type B = Vulkan;
 
-struct Swapchain {
-  data: <B as Backend>::Swapchain,
-  final_pass: <B as Backend>::RenderPass,
+pub(super) enum DescriptorWriteAccess<'a> {
+  Buffer(u32, &'a <B as Backend>::Buffer),
+  Texture(u32, &'a <B as Backend>::Texture),
+  Sampler(u32, &'a <B as Backend>::Sampler),
 }
 
 pub struct RenderDevice {

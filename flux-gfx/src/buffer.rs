@@ -99,7 +99,7 @@ impl IndexBuffer {
       )
     };
     Self {
-      buffer: Buffer::default(),
+      buffer,
       format: I::format(),
     }
   }
@@ -115,13 +115,21 @@ pub struct UniformBuffer<T> {
   pub(crate) buffer: Buffer,
   pub data: T,
 }
-
 impl<T: bytemuck::Pod + bytemuck::Zeroable> UniformBuffer<T> {
   pub fn new() -> Self {
     let data = T::zeroed();
-    Self {
-      buffer: Buffer::default(),
-      data,
-    }
+    let buffer = unsafe {
+      crate::device::RENDER_DEVICE.as_ref().map_or_else(
+        || Buffer::default(),
+        |device| device.create_buffer(BufferUsage::UNIFORM_BUFFER, bytemuck::cast_slice(&[data])),
+      )
+    };
+    Self { buffer, data }
+  }
+}
+impl<T> Deref for UniformBuffer<T> {
+  type Target = Buffer;
+  fn deref(&self) -> &Self::Target {
+    &self.buffer
   }
 }

@@ -24,11 +24,10 @@ fn main() {
   let vertex_buffer = VertexBuffer::new(vertices);
   let render_pass = render_device.create_render_pass(&[texture], None);
   let pipeline = render_device.create_graphics_pipeline(
-    &GraphicsPipelineDesc {
-      vs_spv: include_bytes!("shaders/triangle.vert.spv"),
-      fs_spv: include_bytes!("shaders/triangle.frag.spv"),
-      viewport: Viewport::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
-    },
+    &GraphicsPipelineDesc::new()
+      .vertex_shader(include_bytes!("shaders/triangle.vert.spv"))
+      .fragment_shader(include_bytes!("shaders/triangle.frag.spv"))
+      .viewport(0.0, 0.0, WIDTH as f32, HEIGHT as f32, 0.0..1.0),
     Some(&render_pass),
   );
   let mut command_list = render_device.create_command_list();

@@ -1,8 +1,8 @@
 extern crate alloc;
 use crate::{
   buffer::BufferUsage,
-  device::{AcquireSwapchainError, Backend},
-  pipeline::GraphicsPipelineDesc,
+  device::{AcquireSwapchainError, Backend, DescriptorWriteAccess},
+  pipeline::{DescriptorWrite, GraphicsPipelineDesc},
   texture::Format,
 };
 use bytemuck::Pod;
@@ -27,7 +27,7 @@ impl Backend for Vulkan {
     use vulkano::device::{
       physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo,
     };
-    use vulkano::image::{view::ImageView, ImageUsage};
+    use vulkano::image::{view::ImageView, AttachmentImage, ImageUsage};
     use vulkano::instance::{Instance, InstanceCreateInfo};
     use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo};
     use vulkano::swapchain::{ColorSpace, Swapchain, SwapchainCreateInfo};
@@ -163,19 +163,25 @@ impl Backend for Vulkan {
       .unwrap();
 
       let render_pass = vulkano::single_pass_renderpass!(
-          device.clone(),
-          attachments: {
-              color: {
-                  load: Clear,
-                  store: Store,
-                  format: swapchain.image_format(),  // set the format the same as the swapchain
-                  samples: 1,
-              }
+        device.clone(),
+        attachments: {
+          color: {
+            load: Clear,
+            store: Store,
+            format: swapchain.image_format(),  // set the format the same as the swapchain
+            samples: 1,
           },
-          pass: {
-              color: [color],
-              depth_stencil: {}
+          depth: {
+            load: Clear,
+            store: DontCare,
+            format: vulkano::format::Format::D16_UNORM,
+            samples: 1,
           }
+        },
+        pass: {
+          color: [color],
+          depth_stencil: {depth}
+        }
       )
       .unwrap();
 
@@ -183,10 +189,19 @@ impl Backend for Vulkan {
         .iter()
         .map(|image| {
           let view = ImageView::new_default(image.clone()).unwrap();
+          let depth = ImageView::new_default(
+            AttachmentImage::transient(
+              device.clone(),
+              dimensions.into(),
+              vulkano::format::Format::D16_UNORM,
+            )
+            .unwrap(),
+          )
+          .unwrap();
           Framebuffer::new(
             render_pass.clone(),
             FramebufferCreateInfo {
-              attachments: vec![view],
+              attachments: vec![view, depth],
               ..Default::default()
             },
           )
@@ -248,6 +263,7 @@ impl Backend for Vulkan {
         CommandBufferUsage::OneTimeSubmit,
       )
       .unwrap(),
+      bound_pipeline: None,
       present_resources: Some(PresentResources {
         acquire_future,
         framebuffer: swapchain.framebuffers[image_i].clone(),
@@ -264,24 +280,38 @@ impl Backend for Vulkan {
   fn create_buffer(device: &Self::Device, usage: BufferUsage, data: &[u8]) -> Self::Buffer {
     use vulkano::buffer::CpuAccessibleBuffer;
 
-    let buffer = unsafe {
-      CpuAccessibleBuffer::<[u8]>::uninitialized_array(
-        device.device.clone(),
-        data.len() as u64,
-        usage.into(),
-        false,
-      )
-      .expect("Failed to create buffer")
-    };
-    {
-      let mut mapping = buffer.write().unwrap();
-      mapping.copy_from_slice(data);
-    }
-    let access = buffer.clone();
-
-    VulkanBuffer {
-      handle: buffer,
-      access,
+    unsafe {
+      if usage.contains(BufferUsage::INDEX_BUFFER) {
+        let buffer = CpuAccessibleBuffer::<[u32]>::uninitialized_array(
+          device.device.clone(),
+          data.len() as u64,
+          usage.into(),
+          false,
+        )
+        .expect("Failed to create buffer");
+        {
+          let mut mapping = buffer.write().unwrap();
+          std::ptr::copy_nonoverlapping(
+            data.as_ptr(),
+            bytemuck::cast_slice_mut(&mut mapping).as_mut_ptr(),
+            data.len(),
+          );
+        }
+        VulkanBuffer::IndexU32(buffer)
+      } else {
+        let buffer = CpuAccessibleBuffer::<[u8]>::uninitialized_array(
+          device.device.clone(),
+          data.len() as u64,
+          usage.into(),
+          false,
+        )
+        .expect("Failed to create buffer");
+        {
+          let mut mapping = buffer.write().unwrap();
+          mapping.copy_from_slice(data);
+        }
+        VulkanBuffer::Raw(buffer)
+      }
     }
   }
 
@@ -297,17 +327,23 @@ impl Backend for Vulkan {
       )
       .expect("Failed to create buffer")
     };
-    let access = buffer.clone();
 
-    VulkanBuffer {
-      handle: buffer,
-      access,
-    }
+    VulkanBuffer::Raw(buffer)
   }
 
   fn map_buffer<T: bytemuck::Pod, F: Fn(&mut T)>(buffer: &Self::Buffer, f: F) {
-    let mut content = buffer.handle.write().unwrap();
-    f(bytemuck::from_bytes_mut(&mut content));
+    match buffer {
+      VulkanBuffer::Raw(handle) => {
+        let mut content = handle.write().unwrap();
+        f(bytemuck::from_bytes_mut(&mut content));
+      }
+      VulkanBuffer::IndexU32(handle) => {
+        let mut content = handle.write().unwrap();
+        f(bytemuck::from_bytes_mut(bytemuck::cast_slice_mut(
+          &mut content,
+        )));
+      }
+    }
   }
 
   fn create_texture(
@@ -425,6 +461,7 @@ impl Backend for Vulkan {
     desc: &GraphicsPipelineDesc,
     render_pass: &Self::RenderPass,
   ) -> Self::GraphicsPipeline {
+    use vulkano::pipeline::graphics::depth_stencil::{DepthState, DepthStencilState};
     use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
     use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
     use vulkano::pipeline::graphics::vertex_input::{
@@ -510,9 +547,11 @@ impl Backend for Vulkan {
       // Same as the vertex input, but this for the fragment input
       .fragment_shader(fs.entry_point("main").unwrap(), ())
       // Rasterization
-      .rasterization_state(RasterizationState::default().cull_mode(CullMode::None))
+      .rasterization_state(RasterizationState::default())
       // This graphics pipeline object concerns the first pass of the render pass.
       .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+      // Depth stencil states
+      .depth_stencil_state(DepthStencilState::simple_depth_test())
       // Now that everything is specified, we call `build`.
       .build(device.device.clone())
       .unwrap();
@@ -536,6 +575,7 @@ impl Backend for Vulkan {
 
     VulkanCommandList {
       builder,
+      bound_pipeline: None,
       present_resources: None,
     }
   }
@@ -548,9 +588,7 @@ impl Backend for Vulkan {
         .builder
         .begin_render_pass(
           RenderPassBeginInfo {
-            clear_values: (0..present_resources.framebuffer.attachments().len())
-              .map(|_| Some([0.0, 0.0, 0.0, 1.0].into()))
-              .collect::<Vec<_>>(),
+            clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1f32.into())],
             ..RenderPassBeginInfo::framebuffer(present_resources.framebuffer.clone())
           },
           SubpassContents::Inline,
@@ -605,12 +643,58 @@ impl Backend for Vulkan {
     command_list
       .builder
       .bind_pipeline_graphics(pipeline.handle.clone());
+    command_list.bound_pipeline = Some(pipeline.handle.clone());
   }
 
   fn bind_vertex_buffer(command_list: &mut Self::CommandList, buffer: &Self::Buffer) {
-    command_list
-      .builder
-      .bind_vertex_buffers(0, buffer.access.clone());
+    if let VulkanBuffer::Raw(handle) = buffer {
+      command_list.builder.bind_vertex_buffers(0, handle.clone());
+    }
+  }
+
+  fn bind_index_buffer(command_list: &mut Self::CommandList, buffer: &Self::Buffer) {
+    if let VulkanBuffer::IndexU32(handle) = buffer {
+      command_list.builder.bind_index_buffer(handle.clone());
+    }
+  }
+
+  fn bind_descriptors(
+    command_list: &mut Self::CommandList,
+    set: u32,
+    writes: &[DescriptorWriteAccess],
+  ) {
+    use vulkano::descriptor_set::{DescriptorSet, PersistentDescriptorSet, WriteDescriptorSet};
+
+    if let Some(pipeline) = &command_list.bound_pipeline {
+      let layout = pipeline.layout().set_layouts().get(set as usize).unwrap();
+      let set = PersistentDescriptorSet::new(
+        layout.clone(),
+        writes
+          .iter()
+          .filter_map(|write| match *write {
+            DescriptorWriteAccess::Buffer(binding, buffer) => {
+              if let VulkanBuffer::Raw(buffer) = buffer {
+                Some(WriteDescriptorSet::buffer(binding, buffer.clone()))
+              } else {
+                None
+              }
+            }
+            DescriptorWriteAccess::Texture(binding, texture) => Some(
+              WriteDescriptorSet::image_view(binding, texture.view.clone()),
+            ),
+            DescriptorWriteAccess::Sampler(binding, sampler) => todo!(),
+          })
+          .collect::<Vec<_>>(),
+      )
+      .unwrap();
+
+      command_list.builder.bind_descriptor_sets(
+        pipeline.bind_point(),
+        pipeline.layout().clone(),
+        0,
+        set,
+      );
+    }
   }
 
   fn draw(
@@ -626,6 +710,26 @@ impl Backend for Vulkan {
       .unwrap();
   }
 
+  fn draw_indexed(
+    command_list: &mut Self::CommandList,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+  ) {
+    command_list
+      .builder
+      .draw_indexed(
+        index_count,
+        instance_count,
+        first_index,
+        vertex_offset,
+        first_instance,
+      )
+      .unwrap();
+  }
+
   fn copy_buffer_to_buffer(
     command_list: &mut Self::CommandList,
     src: &Self::Buffer,
@@ -633,12 +737,17 @@ impl Backend for Vulkan {
   ) {
     use vulkano::command_buffer::CopyBufferInfo;
 
+    let src_handle: Arc<dyn vulkano::buffer::BufferAccess> = match src {
+      VulkanBuffer::Raw(handle) => handle.clone(),
+      VulkanBuffer::IndexU32(handle) => handle.clone(),
+    };
+    let dst_handle: Arc<dyn vulkano::buffer::BufferAccess> = match dst {
+      VulkanBuffer::Raw(handle) => handle.clone(),
+      VulkanBuffer::IndexU32(handle) => handle.clone(),
+    };
     command_list
       .builder
-      .copy_buffer(CopyBufferInfo::buffers(
-        src.access.clone(),
-        dst.access.clone(),
-      ))
+      .copy_buffer(CopyBufferInfo::buffers(src_handle, dst_handle))
       .unwrap();
   }
 
@@ -649,11 +758,15 @@ impl Backend for Vulkan {
   ) {
     use vulkano::command_buffer::CopyImageToBufferInfo;
 
+    let dst_handle: Arc<dyn vulkano::buffer::BufferAccess> = match dst {
+      VulkanBuffer::Raw(handle) => handle.clone(),
+      VulkanBuffer::IndexU32(handle) => handle.clone(),
+    };
     command_list
       .builder
       .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
         src.handle.clone(),
-        dst.access.clone(),
+        dst_handle,
       ))
       .unwrap();
   }
@@ -706,9 +819,9 @@ pub struct VulkanSwapchain {
   framebuffers: Vec<Arc<vulkano::render_pass::Framebuffer>>,
 }
 
-pub struct VulkanBuffer {
-  handle: Arc<vulkano::buffer::CpuAccessibleBuffer<[u8]>>,
-  access: Arc<dyn vulkano::buffer::BufferAccess>,
+pub enum VulkanBuffer {
+  Raw(Arc<vulkano::buffer::CpuAccessibleBuffer<[u8]>>),
+  IndexU32(Arc<vulkano::buffer::CpuAccessibleBuffer<[u32]>>),
 }
 
 pub struct VulkanTexture {
@@ -732,6 +845,7 @@ pub struct VulkanCommandList {
   builder: vulkano::command_buffer::AutoCommandBufferBuilder<
     vulkano::command_buffer::PrimaryAutoCommandBuffer,
   >,
+  bound_pipeline: Option<Arc<dyn vulkano::pipeline::Pipeline>>,
   present_resources: Option<PresentResources>,
 }
 
