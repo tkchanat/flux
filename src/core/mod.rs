@@ -1,13 +1,14 @@
-pub mod scene;
 pub mod app;
 pub mod input;
 pub mod node;
+pub mod scene;
 pub use app::*;
-pub use scene::*;
 pub use input::*;
+pub use node::Node;
+pub use scene::*;
 
 // use std::time::{Duration, Instant};
-use instant::{Instant, Duration};
+use instant::{Duration, Instant};
 
 pub struct Timer {
   instant: Instant,

@@ -24,7 +24,6 @@ pub(crate) trait Backend {
   type Buffer;
   type Texture;
   type Sampler;
-  type Descriptor;
   type RenderPass;
   type Framebuffer;
   type GraphicsPipeline;
@@ -33,7 +32,7 @@ pub(crate) trait Backend {
   // Device
   fn create_device(
     window: Option<Arc<winit::window::Window>>,
-  ) -> (Self::Device, Option<(Self::Swapchain, Self::RenderPass)>);
+  ) -> (Self::Device, Option<SwapchainResource>);
 
   // Swapchain
   fn begin_frame(
@@ -52,6 +51,9 @@ pub(crate) trait Backend {
     extent: (u32, u32, u32),
     format: Format,
   ) -> Self::Texture;
+
+  // Sampler
+  fn create_sampler(device: &Self::Device) -> Self::Sampler;
 
   // Render Pass
   fn create_render_pass(
@@ -284,13 +286,18 @@ pub(super) enum DescriptorWriteAccess<'a> {
   Sampler(u32, &'a <B as Backend>::Sampler),
 }
 
+pub(super) struct SwapchainResource {
+  pub(super) swapchain: <B as Backend>::Swapchain,
+  pub(super) final_pass: <B as Backend>::RenderPass,
+  pub(super) extent: winit::dpi::PhysicalSize<u32>,
+}
+
 pub struct RenderDevice {
   device: <B as Backend>::Device,
-  swapchain: Option<(<B as Backend>::Swapchain, <B as Backend>::RenderPass)>,
+  swapchain: Option<SwapchainResource>,
   buffers: RwLock<slab::Slab<<B as Backend>::Buffer>>,
   textures: RwLock<slab::Slab<<B as Backend>::Texture>>,
   samplers: RwLock<slab::Slab<<B as Backend>::Sampler>>,
-  descriptors: RwLock<slab::Slab<<B as Backend>::Descriptor>>,
   render_passes: RwLock<slab::Slab<<B as Backend>::RenderPass>>,
   graphics_pipelines: RwLock<slab::Slab<<B as Backend>::GraphicsPipeline>>,
 }
@@ -303,7 +310,6 @@ impl RenderDevice {
       buffers: RwLock::new(slab::Slab::new()),
       textures: RwLock::new(slab::Slab::new()),
       samplers: RwLock::new(slab::Slab::new()),
-      descriptors: RwLock::new(slab::Slab::new()),
       render_passes: RwLock::new(slab::Slab::new()),
       graphics_pipelines: RwLock::new(slab::Slab::new()),
     });
@@ -337,6 +343,12 @@ impl RenderDevice {
     Texture { handle, extent }
   }
 
+  pub fn create_sampler(&self) -> Sampler {
+    let sampler = B::create_sampler(&self.device);
+    let handle = Some(self.samplers.write().unwrap().insert(sampler));
+    Sampler { handle }
+  }
+
   pub fn create_render_pass(
     &self,
     color_attachments: &[Texture],
@@ -368,7 +380,7 @@ impl RenderDevice {
     let render_passes_read = self.render_passes.read().unwrap();
     let render_pass = match render_pass {
       Some(render_pass) => render_passes_read.get(render_pass.handle).unwrap(),
-      None => &self.swapchain.as_ref().expect("No swapchain").1,
+      None => &self.swapchain.as_ref().expect("No swapchain").final_pass,
     };
     let pipeline = B::create_graphics_pipeline(&self.device, &desc, render_pass);
     let handle = self.graphics_pipelines.write().unwrap().insert(pipeline);
@@ -384,7 +396,7 @@ impl RenderDevice {
 
   pub fn execute_frame<F: Fn(&mut CommandList)>(&self, f: F) {
     let swapchain = self.swapchain.as_ref().expect("No swapchain");
-    match B::begin_frame(&self.device, &swapchain.0) {
+    match B::begin_frame(&self.device, &swapchain.swapchain) {
       Ok(command_list) => {
         let mut command_list = CommandList {
           device: self,
@@ -395,6 +407,13 @@ impl RenderDevice {
       }
       Err(_) => todo!("recreate swapchain"),
     }
+  }
+
+  pub fn swapchain_extent(&self) -> Option<winit::dpi::PhysicalSize<u32>> {
+    self
+      .swapchain
+      .as_ref()
+      .and_then(|swapchain| Some(swapchain.extent))
   }
 }
 impl Drop for RenderDevice {

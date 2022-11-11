@@ -8,13 +8,18 @@ pub struct Texture {
 
 impl Texture {
   pub fn new_2d(extent: (u32, u32), format: Format) -> Self {
-    Self {
-      handle: None,
-      extent: (extent.0, extent.1, 1),
+    let extent = (extent.0, extent.1, 1);
+    unsafe {
+      if let Some(device) = crate::device::RENDER_DEVICE.as_ref() {
+        device.create_texture(extent, format)
+      } else {
+        Self {
+          handle: None,
+          extent,
+        }
+      }
     }
   }
-
-  pub fn update(&self, data: &[u8]) {}
 }
 
 #[derive(Clone, Debug)]

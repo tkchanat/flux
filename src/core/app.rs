@@ -1,8 +1,8 @@
-use std::{cell::Ref, collections::VecDeque, fmt::Display};
+use std::{cell::Ref, collections::VecDeque, fmt::Display, sync::Arc};
 
 use super::{input::InputSystem, Scene};
 use crate::gfx::{self, Renderer};
-use specs::WorldExt;
+use flux_gfx::device::RenderDevice;
 use winit::{
   dpi::PhysicalSize,
   event::*,
@@ -30,9 +30,6 @@ impl<'a> AppData<'a> {
   }
   pub fn window_height(&self) -> u32 {
     self.window.inner_size().height
-  }
-  pub fn world(&self) -> &specs::World {
-    &self.scene.world
   }
 }
 
@@ -64,10 +61,10 @@ pub enum Transition {
 }
 
 struct DisplaySystem {
-  window: winit::window::Window,
+  window: Arc<winit::window::Window>,
 }
 struct RenderingSystem {
-  device: gfx::RenderDeviceOld,
+  device: Arc<RenderDevice>,
   renderer: Box<dyn gfx::Renderer>,
 }
 
@@ -82,20 +79,23 @@ impl AppBuilder {
   }
   pub fn with_display(mut self, event_loop: &EventLoop<()>) -> AppBuilder {
     let size = PhysicalSize::new(400, 400);
-    let window = WindowBuilder::new()
-      .with_inner_size(size)
-      .build(event_loop)
-      .unwrap();
+    let window = Arc::new(
+      WindowBuilder::new()
+        .with_inner_size(size)
+        .build(event_loop)
+        .unwrap(),
+    );
     self.display_system = Some(DisplaySystem { window });
     self
   }
   pub fn with_rendering(mut self) -> AppBuilder {
-    let window = &self
+    let window = self
       .display_system
       .as_ref()
       .expect("Rendering system depends on display system")
-      .window;
-    let mut device = gfx::RenderDeviceOld::new(&window);
+      .window
+      .clone();
+    let mut device = RenderDevice::new(Some(window));
     let renderer = Box::new(gfx::SimpleRenderer::new(&mut device));
     self.rendering_system = Some(RenderingSystem { device, renderer });
     self
@@ -116,9 +116,9 @@ impl AppBuilder {
 }
 
 pub struct Application {
-  pub(crate) render_device: gfx::RenderDeviceOld,
+  pub(crate) render_device: Arc<RenderDevice>,
   pub(crate) scene: Scene,
-  window: winit::window::Window,
+  window: Arc<winit::window::Window>,
   renderer: Box<dyn gfx::Renderer>,
   input_system: InputSystem,
   states: VecDeque<Box<dyn AppState>>,
@@ -191,15 +191,7 @@ impl Application {
     self.state().update(app().app_data());
 
     // Render
-    match self.renderer.render(app().app_data(), &self.render_device) {
-      Ok(_) => {}
-      // Reconfigure the surface if lost
-      Err(wgpu::SurfaceError::Lost) => self.on_resize(self.window.inner_size()),
-      // The system is out of memory, we should probably quit
-      Err(wgpu::SurfaceError::OutOfMemory) => self.quit_requested = true,
-      // All other errors (Outdated, Timeout) should be resolved by the next frame
-      Err(e) => eprintln!("{:?}", e),
-    }
+    self.renderer.render(app().app_data(), &self.render_device);
 
     self.input_system.reset_state();
   }
@@ -233,7 +225,7 @@ impl Application {
   }
   fn on_resize(&mut self, new_size: PhysicalSize<u32>) {
     if new_size.width > 0 && new_size.height > 0 {
-      self.render_device.resize(&new_size);
+      self.renderer.on_resize(&self.render_device, &new_size);
       self.state().resize(&new_size);
     }
   }

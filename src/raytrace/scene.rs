@@ -2,10 +2,7 @@ use super::{
   camera::{Camera, PinholeCamera},
   shape::{Triangle, TriangleMesh},
 };
-use crate::{
-  gfx::{self, Transform},
-  prefabs,
-};
+use crate::{gfx, math, prefabs};
 use std::sync::Arc;
 
 pub(super) enum Primitive {
@@ -39,70 +36,70 @@ impl SceneEngine {
   pub fn translate(&mut self, scene: &crate::core::Scene) {
     self.cameras.clear();
     self.active_cam = -1;
-    self.root = self.translate_node(&scene.root);
+    // self.root = self.translate_node(&scene.root);
   }
-  fn translate_node(&mut self, node: &crate::core::Node) -> Node {
-    let mut prim = Primitive::Empty;
-    node.get_component(|transform: &Transform| {
-      let transform = transform.affine().clone();
-      node.get_component(|mesh: &gfx::Mesh| {
-        let mesh_data = mesh.data.as_ref().expect("Mesh data should not be dropped");
-        let points = mesh_data.positions.clone();
-        let normals = mesh_data.normals.as_ref().unwrap().clone();
-        let texcoords = mesh_data.uvs.clone();
-        let (indices, tri_count) = match &mesh_data.indices {
-          Some(indices) => (indices.clone(), (indices.len() / 3) as u32),
-          None => (
-            (0..points.len()).map(|x| x as u32).collect::<Vec<_>>(),
-            (points.len() / 3) as u32,
-          ),
-        };
-        let object_to_world = transform;
-        let world_to_object = object_to_world.inverse();
-        prim = Primitive::TriangleMesh(Arc::new(TriangleMesh::new(
-          points,
-          normals,
-          texcoords,
-          indices,
-          tri_count,
-          object_to_world,
-          world_to_object,
-        )))
-      });
-      node.get_component(|camera: &prefabs::Camera| {
-        let (near, far) = camera.clipping_planes;
-        let camera = match camera.projection {
-          prefabs::Projection::Perspective {
-            field_of_view,
-            aspect,
-          } => Arc::new(PinholeCamera::new(
-            field_of_view,
-            aspect,
-            near,
-            far,
-            transform,
-          )),
-          prefabs::Projection::Orthographic {
-            top,
-            bottom,
-            left,
-            right,
-          } => todo!(),
-        };
-        self.cameras.push(camera.clone());
-        self.active_cam = 0;
-        prim = Primitive::Camera(camera)
-      });
-    });
-    let mut children = Vec::new();
-    for child in node.children() {
-      children.push(self.translate_node(&child));
-    }
-    Node {
-      prim: Arc::new(prim),
-      children,
-    }
-  }
+  // fn translate_node(&mut self, node: &crate::core::Node) -> Node {
+  //   let mut prim = Primitive::Empty;
+  //   node.get_component(|transform: &math::Transform| {
+  //     let transform = transform.affine().clone();
+  //     node.get_component(|mesh: &gfx::Mesh| {
+  //       let mesh_data = mesh.data.as_ref().expect("Mesh data should not be dropped");
+  //       let points = mesh_data.positions.clone();
+  //       let normals = mesh_data.normals.as_ref().unwrap().clone();
+  //       let texcoords = mesh_data.uvs.clone();
+  //       let (indices, tri_count) = match &mesh_data.indices {
+  //         Some(indices) => (indices.clone(), (indices.len() / 3) as u32),
+  //         None => (
+  //           (0..points.len()).map(|x| x as u32).collect::<Vec<_>>(),
+  //           (points.len() / 3) as u32,
+  //         ),
+  //       };
+  //       let object_to_world = transform;
+  //       let world_to_object = object_to_world.inverse();
+  //       prim = Primitive::TriangleMesh(Arc::new(TriangleMesh::new(
+  //         points,
+  //         normals,
+  //         texcoords,
+  //         indices,
+  //         tri_count,
+  //         object_to_world,
+  //         world_to_object,
+  //       )))
+  //     });
+  //     node.get_component(|camera: &prefabs::Camera| {
+  //       let (near, far) = camera.clipping_planes;
+  //       let camera = match camera.projection {
+  //         prefabs::Projection::Perspective {
+  //           field_of_view,
+  //           aspect,
+  //         } => Arc::new(PinholeCamera::new(
+  //           field_of_view,
+  //           aspect,
+  //           near,
+  //           far,
+  //           transform,
+  //         )),
+  //         prefabs::Projection::Orthographic {
+  //           top,
+  //           bottom,
+  //           left,
+  //           right,
+  //         } => todo!(),
+  //       };
+  //       self.cameras.push(camera.clone());
+  //       self.active_cam = 0;
+  //       prim = Primitive::Camera(camera)
+  //     });
+  //   });
+  //   let mut children = Vec::new();
+  //   for child in node.children() {
+  //     children.push(self.translate_node(&child));
+  //   }
+  //   Node {
+  //     prim: Arc::new(prim),
+  //     children,
+  //   }
+  // }
   // pub fn from_gltf(path: &str) -> Self {
   //   let (gltf, buffers, _) = gltf::import(path).expect("Unable to load gltf file");
 

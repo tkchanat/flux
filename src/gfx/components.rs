@@ -1,7 +1,5 @@
-use specs::{Component, DenseVecStorage};
-use specs_derive::Component;
+use crate::core::node::Component;
 
-#[derive(Component, Default)]
 pub struct Transform {
   affine: glam::Affine3A,
 }
@@ -47,8 +45,16 @@ impl Transform {
     glam::Mat4::from(self.affine)
   }
 }
+// impl Component for Transform {}
 impl From<glam::Affine3A> for Transform {
   fn from(affine: glam::Affine3A) -> Self {
     Self { affine }
+  }
+}
+impl Default for Transform {
+  fn default() -> Self {
+    Self {
+      affine: glam::Affine3A::IDENTITY,
+    }
   }
 }

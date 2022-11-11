@@ -1,7 +1,7 @@
 extern crate alloc;
 use crate::{
   buffer::BufferUsage,
-  device::{AcquireSwapchainError, Backend, DescriptorWriteAccess},
+  device::{AcquireSwapchainError, Backend, DescriptorWriteAccess, SwapchainResource},
   pipeline::{DescriptorWrite, GraphicsPipelineDesc},
   texture::Format,
 };
@@ -14,8 +14,7 @@ impl Backend for Vulkan {
   type Swapchain = VulkanSwapchain;
   type Buffer = VulkanBuffer;
   type Texture = VulkanTexture;
-  type Sampler = ();
-  type Descriptor = ();
+  type Sampler = Arc<vulkano::sampler::Sampler>;
   type RenderPass = Arc<vulkano::render_pass::RenderPass>;
   type Framebuffer = Arc<vulkano::render_pass::Framebuffer>;
   type GraphicsPipeline = VulkanGraphicsPipeline;
@@ -23,7 +22,7 @@ impl Backend for Vulkan {
 
   fn create_device(
     window: Option<Arc<winit::window::Window>>,
-  ) -> (Self::Device, Option<(Self::Swapchain, Self::RenderPass)>) {
+  ) -> (Self::Device, Option<SwapchainResource>) {
     use vulkano::device::{
       physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo,
     };
@@ -209,15 +208,16 @@ impl Backend for Vulkan {
         })
         .collect::<Vec<_>>();
 
-      Some((
-        VulkanSwapchain {
+      Some(SwapchainResource {
+        swapchain: VulkanSwapchain {
           handle: swapchain,
           surface,
           images,
           framebuffers,
         },
-        render_pass,
-      ))
+        final_pass: render_pass,
+        extent: dimensions,
+      })
     });
 
     (
@@ -373,6 +373,13 @@ impl Backend for Vulkan {
       format: format.into(),
       layout,
     }
+  }
+
+  fn create_sampler(device: &Self::Device) -> Self::Sampler {
+    use vulkano::sampler::{Sampler, SamplerCreateInfo};
+
+    let create_info = SamplerCreateInfo::default();
+    Sampler::new(device.device.clone(), create_info).unwrap()
   }
 
   fn create_render_pass(
@@ -682,7 +689,9 @@ impl Backend for Vulkan {
             DescriptorWriteAccess::Texture(binding, texture) => Some(
               WriteDescriptorSet::image_view(binding, texture.view.clone()),
             ),
-            DescriptorWriteAccess::Sampler(binding, sampler) => todo!(),
+            DescriptorWriteAccess::Sampler(binding, sampler) => {
+              Some(WriteDescriptorSet::sampler(binding, sampler.clone()))
+            }
           })
           .collect::<Vec<_>>(),
       )
