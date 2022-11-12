@@ -18,7 +18,7 @@ bitflags::bitflags! {
   }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Buffer {
   pub(super) handle: Option<usize>,
 }
@@ -42,8 +42,24 @@ impl Buffer {
   }
 }
 
+bitflags::bitflags! {
+  pub struct VertexLayout: u8 {
+    const HAS_NORMALS = 0b0000_0001;
+    const HAS_TEXCOORDS = 0b0000_0010;
+    const HAS_TANGENTS = 0b0000_0100;
+    const HAS_COLORS = 0b0000_1000;
+  }
+}
+impl Default for VertexLayout {
+  fn default() -> Self {
+    VertexLayout::HAS_NORMALS | VertexLayout::HAS_TEXCOORDS
+  }
+}
+
+#[derive(Clone, Default)]
 pub struct VertexBuffer {
   pub(super) buffer: Buffer,
+  pub(super) layout: VertexLayout,
 }
 impl VertexBuffer {
   pub fn new<B: bytemuck::Pod>(vertices: B) -> Self {
@@ -57,7 +73,7 @@ impl VertexBuffer {
         |device| device.create_buffer(BufferUsage::VERTEX_BUFFER, bytemuck::cast_slice(vertices)),
       )
     };
-    Self { buffer }
+    Self { buffer, layout: VertexLayout::empty() }
   }
 }
 impl Deref for VertexBuffer {
@@ -86,9 +102,9 @@ impl IndexType for u32 {
   }
 }
 
+#[derive(Clone, Default)]
 pub struct IndexBuffer {
   pub(super) buffer: Buffer,
-  pub(super) format: IndexFormat,
 }
 impl IndexBuffer {
   pub fn new<I: IndexType>(indices: &[I]) -> Self {
@@ -98,10 +114,7 @@ impl IndexBuffer {
         |device| device.create_buffer(BufferUsage::INDEX_BUFFER, bytemuck::cast_slice(indices)),
       )
     };
-    Self {
-      buffer,
-      format: I::format(),
-    }
+    Self { buffer }
   }
 }
 impl Deref for IndexBuffer {

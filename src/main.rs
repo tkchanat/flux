@@ -1,5 +1,9 @@
+use flux::{
+  components::Mesh,
+  core::{self, Node},
+  gfx, math, raytrace,
+};
 use std::sync::Arc;
-use flux::{core, gfx, math, prefabs, raytrace};
 
 struct RealtimeState {
   // Camera
@@ -12,6 +16,7 @@ struct RealtimeState {
   scene_engine: raytrace::SceneEngine,
   // texture: gfx::Texture,
   // screen_quad: core::Node,
+  sphere: Node,
 }
 
 impl core::AppState for RealtimeState {
@@ -78,6 +83,9 @@ impl core::AppState for RealtimeState {
     // screen_quad.add_component(mesh);
     // screen_quad.add_component(material);
 
+    let sphere = Node::new("sphere");
+    sphere.add_component(Mesh::sphere());
+
     Self {
       camera_yaw: 0.0,
       camera_pitch: 0.0,
@@ -85,6 +93,7 @@ impl core::AppState for RealtimeState {
       camera_sensitivity: 0.01,
       render_engine,
       scene_engine,
+      sphere,
       // texture,
       // screen_quad,
     }

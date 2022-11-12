@@ -14,22 +14,19 @@ pub enum Projection {
   },
 }
 
-pub struct Camera {
+pub struct StaticCamera {
   pub projection: Projection,
   pub clipping_planes: (f32, f32),
 }
-impl Camera {
-  pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Node {
-    let node = Node::new("camera");
-    // node.add_component(Transform::default());
-    // node.add_component(Camera {
-    //   projection: Projection::Perspective {
-    //     field_of_view: fov_y,
-    //     aspect,
-    //   },
-    //   clipping_planes: (near, far),
-    // });
-    node
+impl StaticCamera {
+  pub fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> Self {
+    Self {
+      projection: Projection::Perspective {
+        field_of_view: fov_y,
+        aspect,
+      },
+      clipping_planes: (near, far),
+    }
   }
   pub fn projection(&self) -> glam::Mat4 {
     let (near, far) = self.clipping_planes;

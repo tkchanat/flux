@@ -1,8 +1,9 @@
-use crate::{core::AppData, prefabs::Camera};
+use crate::components::StaticCamera;
+use crate::core::AppData;
 use flux_gfx::{
   buffer::UniformBuffer,
   device::RenderDevice,
-  pipeline::{GraphicsPipeline, GraphicsPipelineDesc},
+  pipeline::{DescriptorWrite, GraphicsPipeline, GraphicsPipelineDesc},
   texture::{Format, Texture},
 };
 
@@ -21,12 +22,12 @@ struct CameraUniform {
   pub projection: [[f32; 4]; 4],
 }
 
-pub struct SimpleRenderer {
+pub struct StandardRenderer {
   camera_buffer: UniformBuffer<CameraUniform>,
   pipeline_opaque: GraphicsPipeline,
   pipeline_overlay: GraphicsPipeline,
 }
-impl Renderer for SimpleRenderer {
+impl Renderer for StandardRenderer {
   fn new(render_device: &RenderDevice) -> Self {
     let camera_buffer = UniformBuffer::new();
     let pipeline_opaque = render_device.create_graphics_pipeline(
@@ -51,15 +52,11 @@ impl Renderer for SimpleRenderer {
     }
   }
   fn render(&mut self, app: AppData, render_device: &RenderDevice) {
-    // let output = render_device.surface.get_current_texture()?;
-    // let view = output
-    //   .texture
-    //   .create_view(&wgpu::TextureViewDescriptor::default());
-
-    // let depth_view = self
-    //   .depth_stencil
-    //   .create_view(&wgpu::TextureViewDescriptor::default());
-
+    let camera = StaticCamera::perspective(90f32.to_radians(), 1.0, 0.01, 1000.0);
+    self.camera_buffer.map(|buffer: &mut CameraUniform| {
+      buffer.view = glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, 1.0)).to_cols_array_2d();
+      buffer.projection = camera.projection().to_cols_array_2d();
+    });
     // let world = app.world();
     // let transform_storage = world.read_storage::<Transform>();
     // let camera_storage = world.read_storage::<Camera>();
@@ -76,6 +73,11 @@ impl Renderer for SimpleRenderer {
 
     render_device.execute_frame(|command_list| {
       command_list.begin_final_pass();
+      command_list.bind_graphics_pipeline(&self.pipeline_opaque);
+      // command_list.bind_vertex_buffer(&vertex_buffer);
+      // command_list.bind_index_buffer(&index_buffer);
+      command_list.bind_descriptors(0, &[DescriptorWrite::buffer(0, &self.camera_buffer)]);
+      // command_list.draw_indexed(indices.len() as u32, 1, 0, 0, 0);
       command_list.end_render_pass();
     });
   }

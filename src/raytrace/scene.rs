@@ -2,7 +2,7 @@ use super::{
   camera::{Camera, PinholeCamera},
   shape::{Triangle, TriangleMesh},
 };
-use crate::{gfx, math, prefabs};
+use crate::{gfx, math};
 use std::sync::Arc;
 
 pub(super) enum Primitive {

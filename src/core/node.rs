@@ -1,78 +1,57 @@
-use std::any::{Any, TypeId};
-use std::cell::{Ref, RefCell, RefMut};
+#[macro_use]
+use std::cell::{Ref, RefCell};
 use std::cmp::PartialEq;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-
-use serde::ser::SerializeStruct;
 
 #[typetag::serde]
 pub trait Component: 'static {
+  fn type_id() -> u32
+  where
+    Self: Sized,
+  {
+    const_fnv1a_hash::fnv1a_hash_str_32(Self::type_name())
+  }
+  fn type_name() -> &'static str
+  where
+    Self: Sized;
   fn init(&mut self) {}
   fn start(&mut self) {}
   fn update(&mut self, dt: f32) {}
   fn destroy(&mut self) {}
 }
 
-pub trait ComponentType {
-  fn name() -> &'static str;
-  fn identifier() -> u32;
-}
-macro_rules! impl_component_type {
-  ($name: ident) => {
-    impl ComponentType for $name {
-      fn name() -> &'static str {
-        stringify!($name)
-      }
-      fn identifier() -> u32 {
-        const_fnv1a_hash::fnv1a_hash_str_32(stringify!($name))
-      }
-    }
-  };
-}
+// pub trait ComponentType {
+//   fn identifier() -> u32;
+// }
+// #[macro_export]
+// macro_rules! impl_component_type {
+//   ($name: ident) => {
+//     impl ComponentType for $name {
+//       fn identifier() -> u32 {
+//         const_fnv1a_hash::fnv1a_hash_str_32(stringify!($name))
+//       }
+//     }
+//   };
+// }
+// pub use impl_component_type;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct TypedComponent {
+  #[serde(skip_serializing, skip_deserializing)]
   ty: u32,
   component: Box<dyn Component>,
 }
-impl serde::ser::Serialize for TypedComponent {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    self.component.serialize(serializer)
-  }
-}
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct NodeData {
   name: String,
+  #[serde(skip_serializing, skip_deserializing)]
   parent: Weak<RefCell<NodeData>>,
   children: Vec<Node>,
   components: Vec<TypedComponent>,
 }
-impl serde::ser::Serialize for NodeData {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    let mut state = serializer.serialize_struct("NodeData", std::mem::size_of::<NodeData>())?;
-    state.serialize_field("name", &self.name)?;
-    state.serialize_field("children", &self.children)?;
-    state.serialize_field("components", &self.components)?;
-    state.end()
-  }
-}
 
 pub struct Node(Rc<RefCell<NodeData>>);
-impl serde::ser::Serialize for Node {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    let value = unsafe { &*(&*self.0.as_ptr() as *const NodeData) };
-    serializer.serialize_newtype_struct("Node", value)
-  }
-}
 impl Node {
   pub fn new(name: &str) -> Self {
     Self(Rc::new(RefCell::new(NodeData {
@@ -100,39 +79,43 @@ impl Node {
       .and_then(|parent| Some(Node(parent)))
   }
 
-  pub fn add_child(&self, child: Node) -> Ref<'_, Node> {
+  pub fn add_child(&self, child: Node) {
     {
       let mut data = self.0.borrow_mut();
       data.children.push(child);
     }
-    Ref::map(self.0.borrow(), |node| node.children.last().unwrap())
   }
 
   pub fn set_parent(&self, parent: &Node) {
-    if let Some(old_parent) = self.0.borrow().parent.upgrade() {
+    let mut data = self.0.borrow_mut();
+    if let Some(old_parent) = data.parent.upgrade() {
+      if Rc::ptr_eq(&self.0, &old_parent) {
+        return; // Assign to the same node as parent
+      }
+
       let children = &mut old_parent.borrow_mut().children;
       if let Some(index) = children.iter().position(|x| x == self) {
         children.remove(index);
       }
     }
-    self.0.borrow_mut().parent = Rc::downgrade(&parent.0);
+    data.parent = Rc::downgrade(&parent.0);
     parent.add_child(Node(self.0.clone()));
   }
 
-  pub fn add_component<C: Component + ComponentType>(&self, component: C) {
+  pub fn add_component<C: Component>(&self, component: C) {
     let mut data = self.0.borrow_mut();
     data.components.push(TypedComponent {
-      ty: C::identifier(),
+      ty: C::type_id(),
       component: Box::new(component),
     });
   }
 
-  pub fn get_component<C: ComponentType>(&self) -> Option<Ref<'_, C>> {
+  pub fn get_component<C: Component>(&self) -> Option<Ref<'_, C>> {
     let data = self.0.borrow();
     data
       .components
       .iter()
-      .position(|comp| comp.ty == C::identifier())
+      .position(|comp| comp.ty == C::type_id())
       .and_then(|index| {
         Some(Ref::map(data, |data| unsafe {
           &*(std::ptr::addr_of!(*(&data.components[index]).component.as_ref()).cast::<C>())
@@ -145,6 +128,32 @@ impl PartialEq for Node {
     Rc::ptr_eq(&self.0, &other.0)
   }
 }
+impl serde::ser::Serialize for Node {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let value = unsafe { &*(&*self.0.as_ptr() as *const NodeData) };
+    serializer.serialize_newtype_struct("Node", value)
+  }
+}
+impl<'de> serde::de::Deserialize<'de> for Node {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: serde::Deserializer<'de>,
+  {
+    let mut node_data = NodeData::deserialize(deserializer)?;
+    for typed in node_data.components.iter_mut() {
+      typed.ty = const_fnv1a_hash::fnv1a_hash_str_32(typed.component.typetag_name());
+    }
+    let node = Self(Rc::new(RefCell::new(node_data)));
+    for child in node.children().iter() {
+      let mut data = child.0.borrow_mut();
+      data.parent = Rc::downgrade(&node.0);
+    }
+    Ok(node)
+  }
+}
 
 #[derive(Clone)]
 pub struct NodeRef(Weak<RefCell<NodeData>>);
@@ -155,25 +164,38 @@ mod tests {
 
   #[derive(serde::Serialize, serde::Deserialize)]
   struct Foo(u32);
-
   #[typetag::serde]
-  impl Component for Foo {}
-  impl_component_type!(Foo);
+  impl Component for Foo {
+    fn type_name() -> &'static str {
+      "Foo"
+    }
+  }
 
   #[test]
-  fn test_serialization() {
+  fn test_serde() {
     let foo = Foo(123);
     let ser = serde_json::to_string(&foo).unwrap();
     println!("Serialized foo: {:?}", ser);
     let de: Foo = serde_json::from_str(&ser).unwrap();
     assert!(foo.0 == de.0);
 
+    // Serialize
     let node = Node::new("node");
     let child = Node::new("child");
     node.add_component(foo);
     node.add_child(child);
-    let ser = serde_json::to_string(&node).unwrap();
+    let ser = serde_json::to_string(&node).expect("Unable to serialize node");
     println!("Serialized node {:?}", ser);
+
+    // Deserialize
+    let node = serde_json::from_str::<Node>(&ser).expect("Unable to deserialize node");
+    assert!(node.parent() == None);
+    assert!(node.children().len() == 1);
+    assert!(node.children()[0].get_component::<Foo>().is_none());
+    assert!(node.children()[0].parent().is_some());
+    assert!(node.children()[0].parent().unwrap() == node);
+    assert!(node.get_component::<Foo>().is_some());
+    assert!(node.get_component::<Foo>().unwrap().0 == 123);
   }
 
   #[test]

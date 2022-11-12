@@ -96,7 +96,7 @@ impl AppBuilder {
       .window
       .clone();
     let mut device = RenderDevice::new(Some(window));
-    let renderer = Box::new(gfx::SimpleRenderer::new(&mut device));
+    let renderer = Box::new(gfx::StandardRenderer::new(&mut device));
     self.rendering_system = Some(RenderingSystem { device, renderer });
     self
   }
